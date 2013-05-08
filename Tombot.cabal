@@ -1,0 +1,41 @@
+
+Name:               Tombot
+Version:            0.2.0
+Synopsis:           The cute IRC bot that does useless things.
+Author:             Shou
+Maintainer:         shou@gnusokyo
+Copyright:          Shou
+License:            GPL-2
+License-File:       LICENSE
+Cabal-Version:      >= 1.2
+Build-Type:         Simple
+
+Executable tombot
+    GHC-Options:
+        -threaded
+    Build-Depends:
+        attoparsec,
+        base,
+        containers,
+        either,
+        errors,
+        hint,
+        mtl,
+        network,
+        random,
+        regex-compat,
+        stm,
+        text,
+        time
+    Main-Is:
+        Main.hs
+
+Library
+    Exposed-Modules:
+        Tombot.Funcs
+        Tombot.Bot
+        Tombot.Parser
+        Tombot.IRC
+        Tombot.Types
+        Tombot.Utils
+

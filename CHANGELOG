@@ -1,0 +1,45 @@
+0.1.2
+- Added timed events
+- Changed Config.hs syntax
+- Using a Reader monad wrapped around IO for meta and config
+0.1.3
+- Added channel black/whitelisting.
+- Fixed channel joining
+- Fixed server rejoining
+0.1.4
+- Added per-channel function black/whitelisting
+0.1.5
+- Usage of Reader Monad in Core
+- Rewritten `.sed'
+- Rewritten `.ai'
+- Rewritten `msgInterpret' (now called `parser')
+0.1.6
+- Rewrote `.$'
+- Added Haddock documentation
+- Rewrote `.^' and added searching
+- Rewrote lewd file format
+0.1.7
+- Channel/userlist storing in Core and Client
+- Added `.e', the Haskell interpreting function.
+- Added `.yuri', the RPG minigame function.
+- Added `.sage', the user saging function.
+- Changed Core's client checking; using last modified timestamps instead.
+- Bugfixes:
+    - .sed's case-sensitivity
+    - Userlist nick duplication on NICK change.
+- Changed `.an' to use Nyaa.eu instead.
+- Rewrote Core (several times)
+Later
+- Added black/whitelisting to event channels (INCOMPLETE)
+- Added a `diff' function for `anime', `manga', `airing', etc. (INCOMPLETE)
+- Fixed variables (INCOMPLETE)
+
+0.2.0 -- Major update
+- Deprecated KawaiiBot in favour of Tombot.
+- Merged Core and Client together.
+- Added runtime module reloading through `hint'.
+- Rewrote KawaiiLang parser.
+- Rewrote Config and related data.
+- Added new IRC bot functions.
+- Added permission system.
+
