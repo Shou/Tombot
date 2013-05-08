@@ -110,8 +110,12 @@ help str = return ""
 history :: Func
 history str = do
     tmvar <- gets keepConfigTMVar
+    host <- servHost <$> gets keepServ
+    edest <- currDest <$> gets keepCurrent
     path <- fmap (confLogPath . fst) $ liftIO $ atomically $ readTMVar tmvar
-    let (tn, str') = T.break (== ' ') $ T.stripStart str
+    let dest = T.unpack $ either userNick chanName edest
+        path' = path <> host <> " " <> dest
+        (tn, str') = T.break (== ' ') $ T.stripStart str
         mn = readMay $ T.unpack tn :: Maybe Int
         n = maybe 1 id mn
         string = maybe str (const str') mn
