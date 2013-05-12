@@ -2,8 +2,9 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 -- {-# LANGUAGE StandaloneDeriving #-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
--- {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Tombot.Types where
 
@@ -25,19 +26,6 @@ import System.IO (Handle)
 -- - Events
 
 -- XXX
--- - We're going to run each server in its own thread, so how do we let them
---   talk to each other? Or rather, why would they need to communicate?
---      - We know that Events require handles, as such we need some TMVar that
---        holds all the Handles and their associated server host names.
---      - We have to share the TMVar with all Servers and gain the ability to
---        write to all servers as well.
--- - We can make Memory into `StateT (Current, Server, TMVar a). We don't need
---   `Config' anymore after the initialisation.
--- - Global userlist (in Server) <|> Local userlist (in Channel)
---      - Global means it's easier to access the user status, to see whether
---        he's admin, user, banned, whatnot.
---      - Local means... what?
--- - Where do we store the Handles in the TMVar?
 
 
 instance Show (TMVar a) where
@@ -49,7 +37,8 @@ data Status = RootStat
             | OpStat
             | UserStat
             | BannedStat
-            deriving (Show)
+            | OfflineStat
+            deriving (Eq, Ord, Show)
 
 data Personality = Deredere
                  -- ^ Purely soft/kind.
@@ -67,20 +56,21 @@ data Mood = Mood { moodPers :: Personality
                  , moodGrid :: (Int, Int)
                  } deriving (Show)
 
--- XXX permission system friendly? What is needed then? UserStatus? Banned/not?
+type Mode = Text
+
 data User = User { userNick :: Text
                  , userName :: Text
                  , userHost :: Text
-                 , userMode :: Text
                  , userStat :: Status
+                 , userChans :: Map Text Mode
                  } deriving (Show)
 
 -- XXX what else should a `Channel' hold?
 -- NOTE rejoin on kick with `chanJoin = True`; don't join at all if `False`.
 data Channel = Channel { chanName :: Text
+                       , chanTopic :: Text
                        , chanJoin :: Bool
                        , chanAutoJoin :: Bool
-                       , chanUsers :: Map Text User
                        , chanMode :: Text
                        , chanPrefix :: [Char]
                        , chanFuncs :: Allowed [Text]
@@ -113,7 +103,8 @@ data Server = Server { servHost :: String
                      , servNickServId :: Text
                      , servHandle :: Maybe Handle
                      , servTMVar :: TMVar (Map String Handle)
-                     , servStatus :: ServStatus
+                     , servStat :: ServStatus
+                     , servUsers :: Map Text User
                      } deriving (Show, Typeable)
 
 -- For the sake of convenience
@@ -121,7 +112,6 @@ data Current = Current { currUser :: User
                        , currMode :: Text
                        , currServ :: String
                        , currDest :: Either User Channel
-                       , currUsers :: Map Text User
                        } deriving (Show, Typeable)
 
 -- XXX How to do config paths?
@@ -132,6 +122,7 @@ data Config = Config { confVerbosity :: Int
                      , confLogging :: Bool
                      , confLogPath :: FilePath
                      , confPath :: FilePath
+                     , confDir :: FilePath
                      , confModules :: [FilePath]
                      , confFuncs :: Map Text Func
                      } deriving (Typeable)
@@ -145,6 +136,7 @@ data Keeper = Keeper { keepServ :: Server
 -- XXX Perhaps there is a way to add the modifications made to Current to
 --     Config in a better way?
 type Mind = StateT Keeper IO
+type Decide e a = EitherT e IO a
 
 {-
 -- TODO ugh pls ask #haskell

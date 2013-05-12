@@ -8,6 +8,7 @@ module Tombot.Funcs (funcs) where
 
 import Tombot.Types
 import Tombot.Utils
+import Tombot.Parser
 
 import Control.Applicative
 import Control.Arrow
@@ -21,6 +22,7 @@ import Control.Monad.State
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import Data.Char
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
@@ -47,6 +49,12 @@ funcs = M.fromList [ (">", echo)
                    , ("funcs", list)
                    , ("help", help)
                    , ("^", history)
+                   , ("raw", raw)
+                   , ("set", set)
+                   , ("britify", britify)
+                   , ("cutify", cutify)
+                   , ("eval", eval)
+                   , ("greet", greet)
                    ]
 
 
@@ -80,29 +88,68 @@ anime str = do
     return $ T.intercalate ", " animes'
 -}
 
+-- | Replace words with British slang equivalents.
+britify :: Func
+britify str = do
+    tmvar <- gets $ keepConfigTMVar
+    bs <- liftIO $ do
+        dir <- atomically $ confDir . fst <$> readTMVar tmvar
+        ml <- readConfig $ dir <> "britify"
+        return $ maybe [] id ml
+    return $ wordReplace str bs
+
+-- TODO
+cutify :: Func
+cutify str = do
+    tmvar <- gets $ keepConfigTMVar
+    bs <- liftIO $ do
+        dir <- atomically $ confDir . fst <$> readTMVar tmvar
+        ml <- readConfig $ dir <> "cutify"
+        return $ maybe [] id ml
+    return $ wordReplace str bs
+
 echo :: Func
 echo = return
 
+-- TODO get `funcs' from Config
 list :: Func
-list _ = return $ T.intercalate ", " $ M.keys funcs
+list _ = return $ T.unwords $ M.keys funcs
+
+-- TODO
+eval :: Func
+eval _ = return ""
 
 -- TODO reconnect on Handle error
+--      - Make a function that does this for us.
 -- TODO check your privileges
 glob :: Func
-glob str = do
+glob str = whenStat (>= AdminStat) $ do
     tmvar <- gets $ keepConfigTMVar
     mhs <- fmap snd $ liftIO $ atomically $ readTMVar tmvar
-    forM_ (M.elems mhs) $ \h -> do
+    void . forkMi $ forM_ (M.elems mhs) $ \h -> do
         e <- liftIO $ do
             n <- randomRIO (3, 6)
+            e <- E.try $ T.hPutStrLn h str
             threadDelay (10^6 * n)
-            E.try $ T.hPutStrLn h str
+            return e
         either onerror return e
     return ""
   where
     onerror :: SomeException -> Mind ()
     onerror e = erro e
 
+greet :: Func
+greet str = liftIO $ randomRIO (0, len - 1) >>= return . (greetings !!)
+  where
+    greetings = [ "Hi～! :3"
+                , "Heya everyone!"
+                , "Hiiii!"
+                , "How's it going? c:"
+                , "It's me! Hi " <> str <> " :3c"
+                ]
+    len = length greetings
+
+-- TODO read from file
 help :: Func
 help str = return ""
 
@@ -119,10 +166,21 @@ history str = do
         mn = readMay $ T.unpack tn :: Maybe Int
         n = maybe 1 id mn
         string = maybe str (const str') mn
-    ts <- reverse . T.lines <$> liftIO (T.readFile path)
-    let ts' = flip filter ts $ flip any (T.words str) . flip T.isInfixOf
+    ts <- reverse . T.lines <$> liftIO (T.readFile path')
+    let ts' = flip filter ts $ flip any (T.words str') . flip T.isInfixOf
         mt = ts' `atMay` n
     return $ maybe "" id mt
+  where
+    fil x y | T.null x = True
+            | T.null y = False
+            | T.head x == '-' = T.tail x /= y
+            | otherwise = x == y
+
+-- TODO
+-- XXX Admin or above required
+-- | `store' adds a new func to the Map and runs the contents through `eval'.
+store :: Func
+store str = return ""
 
 -- | Pick a random choice or number.
 random :: Func
@@ -144,13 +202,13 @@ random str
     isDigits = T.all (`elem` ['0' .. '9'])
     maybeRead = fmap fst . listToMaybe . reads
 
--- TODO check your privileges
 raw :: Func
-raw str = write str >> return ""
+raw str = whenStat (>= AdminStat) $ write str >> return ""
 
 -- TODO what should the argument be
+-- FIXME
 reload :: Func
-reload _ = do
+reload _ = whenStat (>= AdminStat) $ do
     confpath <- confPath . fst <$> readConfHands
     ec <- loadModules [confpath] ["Config"] "config" (H.as :: Config)
     let e = flip fmap ec $ \config -> do
@@ -171,7 +229,7 @@ reload _ = do
 -- TODO Char x should only be a specific range of chars. No alphanumeric or '\'
 -- | Regex replace function.
 --
--- > .sed s\/apple\/banana\/i I love Apple!
+-- > .sed s\/apples\/Google\/i I love apples!
 sed3 :: Func
 sed3 str = do
     mwhen (T.length str > 1) $ do
@@ -197,6 +255,18 @@ sed3 str = do
         pure (mat <> [mc], rep <> [rc], ins, str)
     escape x = A.try $ A.notChar '\\' >>= \c -> A.char x >> return c
 
+-- TODO
+-- TODO save settings to a file
+-- | `set' lets the user change settings, such as the `UserStat' of a user.
+set :: Func
+set str = return ""
+
 userlist :: Func
-userlist _ = gets $ T.unwords . M.keys . currUsers . keepCurrent
+userlist _ = whenStat (>= OpStat) $ do
+    edest <- gets $ currDest . keepCurrent
+    users <- gets $ M.elems . servUsers . keepServ
+    return $ either userNick (chanNicks users) edest
+  where
+    chanNicks us c = let nicks = filter (M.member (chanName c) . userChans) us
+                     in T.unwords $ map userNick nicks
 

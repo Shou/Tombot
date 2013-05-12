@@ -76,10 +76,12 @@ instance Show KawaiiLang where
 -- }}}
 
 -- TODO
--- - A way to send `cmds' and `funcs'.
+-- - Operator escaping functions.
+--      - Should closing parens be escaped too?
+--      - How can we use these together with other functions?
+--          - : about $$ funcs -> sed s/ /|/ -> ra -> eval
 
 -- FIXME
--- - See TODO
 
 -- XXX
 
