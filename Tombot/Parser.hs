@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 
-module Tombot.Parser where
+module Tombot.Parser (botparser, ircparser, compile) where
 
 -- {{{ Imports
 import Tombot.Types

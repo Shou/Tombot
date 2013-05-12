@@ -42,19 +42,21 @@ import Text.Regex
 
 funcs :: Map Text Func
 funcs = M.fromList [ (">", echo)
-                   , ("sed", sed3)
-                   , ("ra", random)
-                   , ("us", userlist)
-                   , ("reload", reload)
-                   , ("funcs", list)
-                   , ("help", help)
-                   , ("^", history)
+                   , ("del", del)
                    , ("raw", raw)
                    , ("set", set)
-                   , ("britify", britify)
-                   , ("cutify", cutify)
+                   , ("sed", sed3)
+                   , ("^", history)
                    , ("eval", eval)
+                   , ("help", help)
+                   , ("ra", random)
+                   , ("wiki", wiki)
+                   , ("funcs", list)
                    , ("greet", greet)
+                   , ("us", userlist)
+                   , ("cutify", cutify)
+                   , ("reload", reload)
+                   , ("britify", britify)
                    ]
 
 
@@ -107,6 +109,10 @@ cutify str = do
         ml <- readConfig $ dir <> "cutify"
         return $ maybe [] id ml
     return $ wordReplace str bs
+
+-- TODO
+del :: Func
+del str = return ""
 
 echo :: Func
 echo = return
@@ -269,4 +275,8 @@ userlist _ = whenStat (>= OpStat) $ do
   where
     chanNicks us c = let nicks = filter (M.member (chanName c) . userChans) us
                      in T.unwords $ map userNick nicks
+
+-- TODO
+wiki :: Func
+wiki str = return ""
 
