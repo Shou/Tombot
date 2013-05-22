@@ -23,6 +23,7 @@ import Control.Monad.State
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
 import Data.Char
+import Data.List
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
@@ -35,60 +36,148 @@ import qualified Language.Haskell.Interpreter as H
 
 import System.Random (randomRIO)
 
+import Text.JSON
 import Text.Regex
+import Text.XML.Light
 
 -- }}}
 
 
 funcs :: Map Text Func
-funcs = M.fromList [ (">", echo)
+funcs = M.fromList [ ("b", ban)
+                   , (">", echo)
+                   , ("<", priv)
+                   , ("k", kick)
+                   , ("m", mode)
                    , ("del", del)
+                   , ("gay", gay)
                    , ("raw", raw)
+                   , ("sed", sed)
                    , ("set", set)
-                   , ("sed", sed3)
+                   , ("v", voice)
+                   , ("an", anime)
+                   , ("ma", manga)
                    , ("^", history)
+                   , ("ai", airing)
+                   , ("dict", dict)
                    , ("eval", eval)
                    , ("help", help)
+                   , ("http", http)
+                   , ("isup", isup)
+                   , ("kill", kill)
+                   , ("let", store)
                    , ("ra", random)
+                   , ("tell", tell)
                    , ("wiki", wiki)
                    , ("funcs", list)
+                   , ("kb", kickban)
+                   , ("about", about)
+                   , ("event", event)
                    , ("greet", greet)
+                   , ("sleep", sleep)
+                   , ("title", title)
+                   , ("topic", topic)
+                   , ("show", reveal)
                    , ("us", userlist)
                    , ("cutify", cutify)
                    , ("reload", reload)
+                   , ("urb", urbandict)
                    , ("britify", britify)
                    ]
 
 
-{-
--- FIXME String -> Text
+-- TODO
+about :: Func
+about _ = return ""
+
+-- XXX wait, isn't this what `store' is for?
+--     or was it `let'?
+-- TODO
+alias :: Func
+alias str = return ""
+
+-- TODO filters
 -- | Low level anime releases function, instead returning a list of strings.
-anime' :: Text -> Mind [Text]
+anime' :: Text -> Mind [String]
 anime' str = do
-    let (str', filters) = foldr' sepFilter ("", []) $ words str
+    let (tn, str') = T.break (== ' ') $ T.stripStart str
+        mn = readMay $ T.unpack tn :: Maybe Int
+        n = maybe 10 id mn
+        string = maybe str (const str') mn
+    -- TODO filter
+    --let (str', filters) = foldr' sepFilter ("", []) $ words str
         burl = "http://www.nyaa.eu/?page=search&cats=1_37&filter=2&term="
-    html <- liftIO $ httpGetString (burl ++ urlEncode' str')
+    -- TODO urlEncode'
+    html <- liftIO $ httpGetString (T.unpack $ burl <> string)
     let elem' = fromMaybeElement $ parseXMLDoc html
         qname = QName "td" Nothing Nothing
         attrs = [Attr (QName "class" Nothing Nothing) "tlistname"]
         elems = findElementsAttrs qname attrs elem'
-        animes = map (strip . elemsText) elems
-        animes' = filter (\x -> not . or $ map (`isInfixOf` x) filters) animes
-        -- FIXME make this read the first word of str and use that
-        amount = 10 --if length args > 1 then (args !! 1) `safeRead` 10 else 10
-    verbosity <- asks (verbosityC . getConfig)
-    liftIO . when (verbosity > 1) $ do
-        putStrLn $ "Filters: %(f); str': %(s)" % [("f" :: String, join ", " filters), ("s", str')]
-    return $ take amount animes'
+        -- TODO strip . elemsText
+        animes = map (elemsText) elems
+        -- TODO filter
+        --animes' = filter (\x -> not $ any (`isInfixOf` x) filters) animes
+    return $ take n animes
 
--- FIXME String -> Text
 -- | Anime releases function.
 anime :: Text -> Mind Text
 anime str = do
     animes <- anime' str
-    let animes' = colorize animes
+    let animes' = map (colourise . T.pack) animes
     return $ T.intercalate ", " animes'
--}
+
+-- TODO filter
+airing :: Func
+airing str = do
+    let (tn, str') = T.break (== ' ') $ T.stripStart str
+        mn = readMay $ T.unpack tn :: Maybe Int
+        n = maybe 10 id mn
+        string = T.unpack $ maybe str (const str') mn
+        url = "http://www.mahou.org/Showtime/?o=ET"
+        isSearch = not $ null string
+    content <- httpGetString url
+    let elem = fromMaybeElement $ parseXMLDoc content
+        qTable = QName "table" Nothing Nothing
+        aSummary = [Attr (QName "summary" Nothing Nothing) "Currently Airing"]
+        table = findElementsAttrs qTable aSummary elem
+        table2 = join $ fmap (findElementsIn qTable) table
+        qTr = QName "tr" Nothing Nothing
+        trs :: [Element]
+        trs = drop 1 . join $ fmap (findElements qTr) table2
+        tds :: [[String]]
+        tds = fmap (fmap elemsText . contentsToEls . elContent) trs
+        f (_ : series : season : station : company : time : eta : xs) acc =
+            let seri = "\ETX10" ++ series ++ "\ETX"
+                tim' = "\ETX06" ++ time ++ "\ETX"
+                eta' = "(" ++ istrip eta ++ ")"
+                nonSearch = unwords [seri, tim', eta']
+                proSearch = unwords [ "\ETX10Series\ETX:", series
+                                    , "\ETX10Season\ETX:", season
+                                    , "\ETX10Time\ETX:", time
+                                    , "\ETX10ETA\ETX:", istrip eta
+                                    , "\ETX10Station\ETX:", station
+                                    , "\ETX10Company\ETX:", company
+                                    ]
+            in if isSearch then
+                let search = map (`isInfixOf` map toLower series)
+                in if and . search . words $ map toLower string
+                   then proSearch : acc
+                   else acc
+               else nonSearch : acc
+        mangas = take n $ foldr f [] tds
+    return . T.pack $ joinUntil ((>= 400) . length) ", " mangas
+  where
+    istrip = unwords . words
+
+-- TODO multiple users
+--      ban by hostname
+-- | Ban a user.
+ban :: Func
+ban str = do
+    mode $ "+" <> bs <> " " <> T.unwords nicks
+  where
+    nicks = T.words str
+    bs = T.replicate (length nicks) "b"
 
 -- | Replace words with British slang equivalents.
 britify :: Func
@@ -100,7 +189,13 @@ britify str = do
         return $ maybe [] id ml
     return $ wordReplace str bs
 
+-- XXX what purpose does this function serve
+colorize :: Func
+colorize str = do
+    return ""
+
 -- TODO
+-- | Replace rude/lascivious words with cute ones.
 cutify :: Func
 cutify str = do
     tmvar <- gets $ keepConfigTMVar
@@ -111,23 +206,93 @@ cutify str = do
     return $ wordReplace str bs
 
 -- TODO
+-- | Delete something stored with `store'.
 del :: Func
 del str = return ""
 
+-- TODO
+dict :: Func
+dict str = do
+    return ""
+
+-- TODO
+-- NOTE how to do this
+-- | Difference function.
+diff :: Func
+diff str = return ""
+
+-- | Print the input.
 echo :: Func
 echo = return
 
--- TODO get `funcs' from Config
-list :: Func
-list _ = return $ T.unwords $ M.keys funcs
-
 -- TODO
+-- XXX this needs to be, like eval, right associative.
+-- | Create an event. Useful with `sleep'.
+event :: Func
+event str = whenStat (>= AdminStat) $ return ""
+
+-- | Rainbow text!
+gay :: Func
+gay str = return $ colorize 0 mempty str <> "\ETX"
+  where
+    colorize n acc t
+        | T.null t = acc
+        | T.head t == ' ' = colorize n (acc <> " ") (T.tail t)
+        | otherwise = let n' = succ n
+                          color = colors !! mod n (length colors)
+                          char' = T.singleton $ T.head t
+                          acc' = acc <> color <> char'
+                          t' = T.tail t
+                      in colorize n' acc' t'
+    colors = ["\ETX04", "\ETX07", "\ETX08", "\ETX03", "\ETX02", "\ETX06"]
+
+-- TODO several users
+-- | Kick a user.
+kick :: Func
+kick str = do
+    edest <- gets $ currDest . keepCurrent
+    let e = flip fmap edest $ write . fullkick
+    either (const $ return "") (>> return "") e
+  where
+    (nicks', txt) = T.break (== ':') str
+    nicks = T.intercalate "," $ T.words nicks'
+    fullkick c = "KICK " <> chanName c <> " " <> nicks <> " " <> txt
+
+-- TODO several users
+-- | Kick and ban a user.
+kickban :: Func
+kickban str = mapM_ ($ str) [kick, ban] >> return ""
+
+-- | List the available Funcs.
+list :: Func
+list _ = do
+    edest <- gets $ currDest . keepCurrent
+    tmvar <- gets keepConfigTMVar
+    funcs <- fmap (confFuncs . fst) . liftIO $ atomically $ readTMVar tmvar
+    let ea = fmap chanFuncs edest
+        ef = flip fmap ea $ allow (M.keys funcs \\) id
+        fs = either (const []) id ef
+    return $ T.unwords fs
+
+-- TODO make this right associative
+-- | Evaluate KawaiiLang.
 eval :: Func
-eval _ = return ""
+eval str = do
+    (Keeper server configt current) <- get
+    funcs <- fmap (confFuncs . fst) $ liftIO $ atomically $ readTMVar configt
+    let edest = currDest current
+        e = flip fmap edest $ \chan -> do
+            let parser = botparser (chanPrefix chan) (M.keys funcs)
+                mkl = A.maybeResult . flip A.feed "" $ A.parse parser str
+                me = flip fmap mkl $ compile funcs
+            maybe (return "") id me
+    either (\x -> warn x >> return "") id e
 
 -- TODO reconnect on Handle error
 --      - Make a function that does this for us.
--- TODO check your privileges
+-- TODO specify server/channel
+-- FIXME this isn't a `raw' replacement!!!
+-- | Global message.
 glob :: Func
 glob str = whenStat (>= AdminStat) $ do
     tmvar <- gets $ keepConfigTMVar
@@ -135,7 +300,7 @@ glob str = whenStat (>= AdminStat) $ do
     void . forkMi $ forM_ (M.elems mhs) $ \h -> do
         e <- liftIO $ do
             n <- randomRIO (3, 6)
-            e <- E.try $ T.hPutStrLn h str
+            e <- E.try $ T.hPutStrLn h $ T.take 420 str
             threadDelay (10^6 * n)
             return e
         either onerror return e
@@ -144,22 +309,32 @@ glob str = whenStat (>= AdminStat) $ do
     onerror :: SomeException -> Mind ()
     onerror e = erro e
 
+-- TODO add more greetings
+-- | Greeting from the bot.
 greet :: Func
-greet str = liftIO $ randomRIO (0, len - 1) >>= return . (greetings !!)
-  where
-    greetings = [ "Hi～! :3"
-                , "Heya everyone!"
-                , "Hiiii!"
-                , "How's it going? c:"
-                , "It's me! Hi " <> str <> " :3c"
-                ]
-    len = length greetings
+greet str = do
+    tmvar <- gets keepConfigTMVar
+    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
+    mgreets <- readConfig $ dir <> "greet"
+    let len = maybe 0 length mgreets
+    n <- liftIO $ randomRIO (0, len - 1)
+    return $ maybe "" (flip (atDef "") n) mgreets
 
--- TODO read from file
+-- XXX should be left associative like `eval'
+-- TODO add help for the operators, help syntax and other relevant things
+-- | Help for usage of the bot.
 help :: Func
-help str = return ""
+help str = do
+    let str' = T.strip $ T.toLower str
+    tmvar <- gets keepConfigTMVar
+    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
+    helps <- readConfig $ dir <> "help"
+    let mhelp = join $ M.lookup str <$> helps
+    return $ maybe "" id mhelp
 
 -- TODO filter
+-- FIXME empty strings return nothing
+-- | Search the bot's logs and return a matching message if any.
 history :: Func
 history str = do
     tmvar <- gets keepConfigTMVar
@@ -182,11 +357,75 @@ history str = do
             | T.head x == '-' = T.tail x /= y
             | otherwise = x == y
 
+-- | Get a HTTP header from a request.
+http :: Func
+http str = do
+    (_, hed, _, _) <- httpGetResponse (T.unpack str)
+    return $ maybe "" T.pack $ lookup (T.unpack httpType) hed
+  where
+    (httpType, httpURL) = bisect (== ' ') str
+
 -- TODO
--- XXX Admin or above required
--- | `store' adds a new func to the Map and runs the contents through `eval'.
-store :: Func
-store str = return ""
+-- | Check if a website is up.
+isup :: Func
+isup str = do
+    let url = "http://" <> foldr (flip T.replace "") str ["https://", "http://"]
+    (_, _, status, _) <- httpGetResponse (T.unpack url)
+    return $ T.pack status
+
+-- TODO
+-- | Kill an event
+kill :: Func
+kill str = return ""
+
+-- TODO filter
+-- | Recent manga releases.
+manga :: Func
+manga str = do
+    let (tn, str') = T.break (== ' ') $ T.stripStart str
+        mn = readMay $ T.unpack tn :: Maybe Int
+        n = maybe 10 id mn
+        string = maybe str (const str') mn
+        burl = "https://www.mangaupdates.com/releases.html?act=archive&search="
+    -- TODO urlEncode
+    html <- httpGetString (T.unpack $ burl <> string)
+    let elem' = fromMaybeElement $ parseXMLDoc html
+        qname = QName "td" Nothing Nothing
+        attrs = [Attr (QName "class" Nothing Nothing) "text pad"]
+        elems = findElementsAttrs qname attrs elem'
+        elems' = map elemsText elems
+        -- Generate a list of colored strings
+        genMangas :: [String] -> [String]
+        genMangas (date:mangatitle:vol:chp:group:rest) =
+            let mangaStr = unwords [ "\ETX10[" ++ strip group ++ "]\ETX"
+                                   , mangatitle
+                                   , "[Ch.\ETX06" ++ chp ++ "\ETX,"
+                                   , "Vol.\ETX06" ++ vol ++ "\ETX]"
+                                   , "(\ETX10" ++ date ++ "\ETX)"
+                                   ]
+            in mangaStr : genMangas rest
+        genMangas _ = []
+        mangas = take n $ genMangas elems'
+    return . T.pack $ joinUntil ((>= 400) . length) ", " mangas
+  where
+    strip = T.unpack . T.strip . T.pack
+
+-- | Set the channel mode.
+mode :: Func
+mode str = whenStat (>= OpStat) $ do
+    edest <- gets $ currDest . keepCurrent
+    let e = flip fmap edest $ write . fullmode
+    either (const $ return "") (>> return "") e
+  where
+    (m, s) = T.break (== ' ') $ T.strip str
+    fullmode c = "MODE " <> m <> " " <> chanName c <> " " <> s
+
+-- | Send a private message to the user.
+priv :: Func
+priv str = do
+    nick <- gets $ userNick . currUser . keepCurrent
+    write $ "PRIVMSG " <> nick <> " :" <> str
+    return ""
 
 -- | Pick a random choice or number.
 random :: Func
@@ -202,17 +441,19 @@ random str
             len = length choices
         n <- liftIO $ randomRIO (0, len - 1)
         if len > 0
-            then return $ choices !! n
-            else return mempty
+        then return $ choices !! n
+        else return mempty
   where
     isDigits = T.all (`elem` ['0' .. '9'])
     maybeRead = fmap fst . listToMaybe . reads
 
+-- | Write directly to the IRC handle of the current server.
 raw :: Func
 raw str = whenStat (>= AdminStat) $ write str >> return ""
 
--- TODO what should the argument be
--- FIXME
+-- TODO
+-- FIXME this explodes
+-- | Reload the bot's Config and Funcs.
 reload :: Func
 reload _ = whenStat (>= AdminStat) $ do
     confpath <- confPath . fst <$> readConfHands
@@ -232,12 +473,45 @@ reload _ = whenStat (>= AdminStat) $ do
         H.setTopLevelModules ms
         H.interpret x as
 
+-- TODO
+-- | Remind a user on login.
+remind :: Func
+remind str = do
+    return ""
+
+-- TODO
+-- XXX make this right associative
+-- | Respond to a regex match by running a function with any match(es) as the
+--   argument.
+--
+-- > :on /http:\/\/\S+/ title \0
+-- > :on /what should i do/i ra Do nothing at all!|S-schlick!|Do your work!|Stop procrastinating!
+respond :: Func
+respond str = whenStat (>= OpStat) $ do
+    return ""
+
+-- | Show StateT data.
+reveal :: Func
+reveal str = do
+    case double of
+        (_, "") -> return "show <key> <argument>"
+        ("User", nick) -> getUser nick >>= return . maybe "" (T.pack . show)
+        ("Chan", chan) -> getChan chan >>= return . maybe "" (T.pack . show)
+        _ -> return $ "Not a key. Keys: " <> T.intercalate ", " keys
+  where
+    key = T.strip . fst . bisect (== ' ') . fst . bisect (== '=')
+    arg = T.strip . snd . bisect (== ' ') . fst . bisect (== '=')
+    double = (key str, arg str)
+    keys = [ "User"
+           , "Chan"
+           ]
+
 -- TODO Char x should only be a specific range of chars. No alphanumeric or '\'
 -- | Regex replace function.
 --
 -- > .sed s\/apples\/Google\/i I love apples!
-sed3 :: Func
-sed3 str = do
+sed :: Func
+sed str = do
     mwhen (T.length str > 1) $ do
         let c = str `T.index` 1
             m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
@@ -262,21 +536,213 @@ sed3 str = do
     escape x = A.try $ A.notChar '\\' >>= \c -> A.char x >> return c
 
 -- TODO
--- TODO save settings to a file
 -- | `set' lets the user change settings, such as the `UserStat' of a user.
 set :: Func
-set str = return ""
+set str = whenStat (>= OpStat) $ do
+    server <- gets keepServ
+    tmvar <- gets keepConfigTMVar
+    config <- liftIO $ atomically $ readTMVar tmvar
+    liftIO $ print triple
+    case triple of
+        (_, _, "") -> return "set <key> <argument> = <value>"
+        ("ConfVerbosity", _, value) -> do
+            let mv = readMay $ T.unpack value :: Maybe Int
+            return . T.pack $ show mv
+        ("keys", _, _) -> return $ "Keys: " <> T.intercalate ", " keys
+        (_, "", _) -> return "set <key> <argument> = <value>"
+        ("UserStat", arg, value) -> do
+            let mv = readMay $ T.unpack (value <> "Stat") :: Maybe UserStatus
+            whenStat (> maybe UserStat id mv) $ do
+                e <- modUser arg $ \u ->
+                    let stat = userStat u
+                    in u { userStat = maybe stat id mv }
+                return $ either id (const "") e
+        ("ChanJoin", arg, value) -> do
+            let mv = readMay $ T.unpack value :: Maybe Bool
+            e <- modChanJoin arg $ \b -> maybe b id mv
+            return $ either id (const "") e
+        ("ChanAutoJoin", arg, value) -> do
+            let mv = readMay $ T.unpack value :: Maybe Bool
+            e <- modChanAutoJoin arg $ \b -> maybe b id mv
+            return $ either id (const "") e
+        ("ChanPrefix", arg, value) -> do
+            e <- modChanPrefix arg $ const $ T.unpack value
+            return $ either id (const "") e
+        ("ChanFuncs", arg, value) -> do
+            let mv = readMay $ T.unpack value :: Maybe (Allowed [Text])
+                insert = case mv of
+                    Just (Whitelist xs)
+                        | "set" `elem` xs -> const $ Whitelist xs
+                        | otherwise -> const $ Whitelist $ "set" : xs
+                    Just (Blacklist xs)
+                        | "set" `notElem` xs -> const $ Blacklist xs
+                        | otherwise -> const $ Blacklist $ filter (/= "set") xs
+                    Nothing -> id
+            e <- modChanFuncs arg $ insert
+            return $ either id (const "") e
+        ("ServBotNick", arg, value) -> do
+            -- TODO only allow valid nicks
+            -- let mh = servHost server `M.lookup` snd config
+            return . T.pack $ show value
+        ("Channel", arg, value) -> return ""
+        _ -> return $ "Not a key. Keys: " <> T.intercalate ", " keys
+  where
+    key = T.strip . fst . bisect (== ' ') . fst . bisect (== '=')
+    arg = T.strip . snd . bisect (== ' ') . fst . bisect (== '=')
+    value = T.strip . snd . bisect (== '=')
+    triple = (key str, arg str, value str)
+    keys = [ "UserStat"
+           , "ChanJoin"
+           , "ChanAutoJoin"
+           , "ChanPrefix"
+           , "ChanFuncs"
+           , "ServBotNick"
+           , "Channel"
+           , "ConfVerbosity"
+           ]
 
+-- XXX Maximum delay?
+--      - 5 years?
+-- | Delay a function by n seconds.
+sleep :: Func
+sleep str = do
+    let mn = readMay (T.unpack $ T.strip str) :: Maybe Double
+    case mn of
+        Just n -> liftIO $ threadDelay $ fromEnum $ 10^6*n
+        _ -> return ()
+    return ""
+
+-- TODO
+-- XXX Admin or above required
+--      - Why the fuck?
+--      - Okay, maybe Op? Or just User...
+-- Isn't this what `let' is supposed to do?
+-- | `store' adds a new func to the Map and runs the contents through `eval'.
+store :: Func
+store str = return ""
+
+-- TODO is there really anything left to do
+-- | Store a message for a user that is printed when they talk next.
+tell :: Func
+tell str = do
+    serv <- gets $ servHost . keepServ
+    edest <- gets $ currDest . keepCurrent
+    cnick <- gets $ userNick . currUser . keepCurrent
+    tmvar <- gets keepConfigTMVar
+    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
+    mtells <- readConfig $ dir <> "tell"
+    let dest = either userName chanName edest
+        mchans = join $ M.lookup serv <$> mtells
+        musers = join $ M.lookup dest <$> mchans
+        mtexts = join $ M.lookup nick <$> musers
+        msgs = maybe [] id mtexts ++ [msg cnick]
+        users = maybe (M.singleton nick msgs) (M.insert nick msgs) musers
+        chans = maybe (M.singleton dest users) (M.insert dest users) mchans
+        servers = maybe (M.singleton serv chans) (M.insert serv chans) mtells
+    liftIO $ do
+        print edest
+        print cnick
+    e <- writeConfig (dir <> "tell") servers
+    return $ either id (const "") e
+  where
+    (nick, msg') = bisect (== ' ') str
+    msg c = T.take 400 msg' <> " (from " <> c <> ")"
+
+-- | Website title fetching function.
+title :: Func
+title str = do
+    (con, hed, _, _) <- httpGetResponse (T.unpack str)
+    let respType = maybe "" id $ lookup "Content-Type" hed
+    liftIO $ print respType
+    mwhen ("text/html" `isInfixOf` respType) $ do
+        let xml = fromMaybeElement $ parseXMLDoc con
+            qTitle = QName "title" Nothing Nothing
+            elem = fromMaybeElement $ findElement qTitle xml
+            text = elemsText elem
+        return $ T.pack text
+
+-- TODO
+-- | Channel topic changing function.
+topic :: Func
+topic str = whenStat (>= OpStat) $ do
+    edest <- gets $ currDest . keepCurrent
+    let e = flip fmap edest $ \c -> do
+        let t = modder $ chanTopic c
+        unless (t == chanTopic c) $ do
+            write $ "TOPIC " <> chanName c <> " :" <> t
+            write $ "TOPIC " <> chanName c
+        return t
+    either (const $ return "") id e
+  where
+    modder
+        | T.null $ T.strip str = id
+        | T.head str == '+' = flip mappend $ T.tail str
+        | T.head str == '-' = removeLast (T.tail str)
+        | otherwise = const str
+    -- TODO move to Utils
+    removeLast :: Text -> Text -> Text
+    removeLast t ts =
+        let len = T.length t
+            t' = T.reverse t
+            ts' = T.reverse ts
+            (beg, end) = T.drop len <$> T.breakOn t' ts'
+        in T.reverse $ beg <> end
+
+-- | Urban dictionary lookup function.
+urbandict :: Func
+urbandict str = do
+    let burl = "http://api.urbandictionary.com/v0/define?term="
+    jsonStr <- httpGetString (burl ++ T.unpack str)
+    let result = decode jsonStr :: Result (JSObject JSValue)
+        text = (\(Ok x) -> x) $ fromJSString
+                              . (\(JSString x) -> x)
+                              . fromJust
+                              . lookup "definition"
+                              . fromJSObject
+                              . (\(JSObject x) -> x )
+                              . (!! 0) . (\(JSArray xs) -> xs)
+                              . fromJust
+                              . lookup "list"
+                              . fromJSObject
+                              <$> result
+    return $ str <> ": " <> T.replace "\n" " " (T.pack text)
+
+-- | Print the channel's userlist.
 userlist :: Func
 userlist _ = whenStat (>= OpStat) $ do
     edest <- gets $ currDest . keepCurrent
     users <- gets $ M.elems . servUsers . keepServ
-    return $ either userNick (chanNicks users) edest
+    return $ either userNick (chanNicks users') edest
   where
     chanNicks us c = let nicks = filter (M.member (chanName c) . userChans) us
-                     in T.unwords $ map userNick nicks
+                         nicks' = filter ((/= OfflineStat) . userStat) nicks
+                     in T.unwords $ map userNick nicks'
+
+-- TODO multiple nicks
+-- | Give voice to users.
+voice :: Func
+voice str = mode $ "+" <> vs <> " " <> T.unwords nicks
+  where
+    nicks = T.words str
+    vs = T.replicate (length nicks) "v"
 
 -- TODO
+-- | Wikipedia summary fetching.
 wiki :: Func
-wiki str = return ""
+wiki str = do
+    let burl = "https://en.wikipedia.org/w/index.php?search="
+        url = T.unpack $ burl <> T.replace "+" "%20" str
+    html <- liftIO $ httpGetString url
+    let xml = fromMaybeElement $ parseXMLDoc html
+        qDiv = QName "div" (Just "http://www.w3.org/1999/xhtml") Nothing
+        qMwcontent = [Attr (QName "id" Nothing Nothing) "mw-content-text"]
+        element = fromMaybeElement $ findElementAttrs qDiv qMwcontent xml
+        qPar = QName "p" Nothing Nothing
+        intro = findChild qPar element
+        qMwsearch = [Attr (QName "class" Nothing Nothing) "mw-search-createlink"]
+        search = findElementAttrs (QName "p" Nothing Nothing) qMwsearch element
+        -- TODO add more fallbacks
+        result = search <|> intro
+        text = elemsText . fromMaybeElement $ result
+    return . T.strip $ T.pack text
 

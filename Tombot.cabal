@@ -15,18 +15,26 @@ Executable tombot
         -threaded
     Build-Depends:
         attoparsec,
+        bytestring,
         base,
+        case-insensitive,
         containers,
         either,
         errors,
         hint,
+        http-conduit,
+        http-conduit-browser,
+        http-types,
+        json,
         mtl,
         network,
         random,
         regex-compat,
         stm,
         text,
-        time
+        time,
+        utf8-string,
+        xml
     Main-Is:
         Main.hs
 

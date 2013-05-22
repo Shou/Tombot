@@ -32,13 +32,13 @@ instance Show (TMVar a) where
     show _ = "TMVar _"
 
 
-data Status = RootStat
-            | AdminStat
-            | OpStat
-            | UserStat
-            | BannedStat
-            | OfflineStat
-            deriving (Eq, Ord, Show)
+data UserStatus = OfflineStat
+                | BannedStat
+                | UserStat
+                | OpStat
+                | AdminStat
+                | RootStat
+                deriving (Eq, Ord, Read, Show)
 
 data Personality = Deredere
                  -- ^ Purely soft/kind.
@@ -58,10 +58,11 @@ data Mood = Mood { moodPers :: Personality
 
 type Mode = Text
 
+-- TODO last activity/online
 data User = User { userNick :: Text
                  , userName :: Text
                  , userHost :: Text
-                 , userStat :: Status
+                 , userStat :: UserStatus
                  , userChans :: Map Text Mode
                  } deriving (Show)
 
@@ -78,7 +79,7 @@ data Channel = Channel { chanName :: Text
 
 data Allowed a = Blacklist a
                | Whitelist a
-               deriving (Show)
+               deriving (Read, Show)
 
 -- TODO move this to Utils
 fromAllowed :: Allowed a -> a
@@ -102,7 +103,6 @@ data Server = Server { servHost :: String
                      , servBotName :: Text
                      , servNickServId :: Text
                      , servHandle :: Maybe Handle
-                     , servTMVar :: TMVar (Map String Handle)
                      , servStat :: ServStatus
                      , servUsers :: Map Text User
                      } deriving (Show, Typeable)
@@ -168,7 +168,7 @@ data IRC = Nick { nickNick :: Text
          | Mode { modeNick :: Text
                 , modeName :: Text
                 , modeHost :: Text
-                , modeChannel :: Text
+                , modeChan :: Text
                 , modeChars :: Text
                 , modeText :: Maybe Text
                 }

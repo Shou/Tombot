@@ -1,3 +1,4 @@
+
 0.1.2
 - Added timed events
 - Changed Config.hs syntax
@@ -40,6 +41,6 @@ Later
 - Added runtime module reloading through `hint'.
 - Rewrote KawaiiLang parser.
 - Rewrote Config and related data.
-- Added new IRC bot functions.
+- Added new IRC bot functions and operators.
 - Added permission system.
 

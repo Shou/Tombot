@@ -13,6 +13,7 @@ import Control.Monad
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import Data.Char
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -80,6 +81,8 @@ instance Show KawaiiLang where
 --      - Should closing parens be escaped too?
 --      - How can we use these together with other functions?
 --          - : about $$ funcs -> sed s/ /|/ -> ra -> eval
+-- - Instead of operating escaping, we just have functions that take everything
+--   on the right as parameters, irregardless of what it is (op, func, ...)
 
 -- FIXME
 
@@ -126,6 +129,7 @@ oper = Oper <$> A.choice strs <*> pure Kempty
            , A.string "->"
            , A.string "<-"
            , A.string "<>"
+           , A.string ">>"
            ]
 
 inParens :: [Text] -> Parser KawaiiLang
@@ -158,7 +162,9 @@ ignoreSpaces = A.skipWhile (== ' ')
 fullCmd :: [Text] -> Parser KawaiiLang
 fullCmd fs = do
     c <- cmd fs
-    A.try A.skipSpace
+    if T.all isLetter c
+    then A.skipSpace
+    else A.try A.skipSpace
     (m, o) <- args
     return $ Func c m o
 
@@ -172,18 +178,16 @@ compile funcs = klToText mempty
     -- Append
     klToText old (Oper "++" kl) = klToText old kl
     -- Pipe
-    klToText old (Oper "->" kl) = do
-        let f = (`T.append` old)
-            kl' = kmap f kl
-        klToText mempty kl'
+    klToText old (Oper "->" kl) = klToText mempty $ kmap (`T.append` old) kl
+    -- Or
     klToText old (Oper "<>" kl) = do
         if T.null $ T.strip old
         then klToText mempty kl
         else return old
+    -- Bind
+    klToText old (Oper ">>" kl) = klToText mempty kl
     -- Parens
-    klToText old (Parens kl0 kl1) = do
-        t <- klToText mempty kl0
-        klToText t kl1
+    klToText old (Parens kl0 kl1) = klToText mempty kl0 >>= flip klToText kl1
     -- Funcs and applicative
     klToText old (Func name args kl) = do
         let (hd, tl) = khead kl
