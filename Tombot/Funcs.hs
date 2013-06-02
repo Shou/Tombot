@@ -65,6 +65,7 @@ funcs = M.fromList [ ("b", ban)
                    , ("http", http)
                    , ("isup", isup)
                    , ("kill", kill)
+                   , ("len", count)
                    , ("let", store)
                    , ("ra", random)
                    , ("tell", tell)
@@ -182,7 +183,7 @@ ban str = do
 -- | Replace words with British slang equivalents.
 britify :: Func
 britify str = do
-    tmvar <- gets $ keepConfigTMVar
+    tmvar <- gets $ currConfigTMVar
     bs <- liftIO $ do
         dir <- atomically $ confDir . fst <$> readTMVar tmvar
         ml <- readConfig $ dir <> "britify"
@@ -198,7 +199,7 @@ colorize str = do
 -- | Replace rude/lascivious words with cute ones.
 cutify :: Func
 cutify str = do
-    tmvar <- gets $ keepConfigTMVar
+    tmvar <- gets $ currConfigTMVar
     bs <- liftIO $ do
         dir <- atomically $ confDir . fst <$> readTMVar tmvar
         ml <- readConfig $ dir <> "cutify"
@@ -250,26 +251,30 @@ gay str = return $ colorize 0 mempty str <> "\ETX"
 -- | Kick a user.
 kick :: Func
 kick str = do
-    edest <- gets $ currDest . keepCurrent
+    edest <- gets $ currDest
     let e = flip fmap edest $ write . fullkick
     either (const $ return "") (>> return "") e
   where
     (nicks', txt) = T.break (== ':') str
     nicks = T.intercalate "," $ T.words nicks'
-    fullkick c = "KICK " <> chanName c <> " " <> nicks <> " " <> txt
+    fullkick c = "KICK " <> stChanName c <> " " <> nicks <> " " <> txt
 
 -- TODO several users
 -- | Kick and ban a user.
 kickban :: Func
 kickban str = mapM_ ($ str) [kick, ban] >> return ""
 
+count :: Func
+count str = do
+    return $ T.pack . show $ T.length str
+
 -- | List the available Funcs.
 list :: Func
 list _ = do
-    edest <- gets $ currDest . keepCurrent
-    tmvar <- gets keepConfigTMVar
+    edest <- gets $ currDest
+    tmvar <- gets currConfigTMVar
     funcs <- fmap (confFuncs . fst) . liftIO $ atomically $ readTMVar tmvar
-    let ea = fmap chanFuncs edest
+    let ea = fmap stChanFuncs edest
         ef = flip fmap ea $ allow (M.keys funcs \\) id
         fs = either (const []) id ef
     return $ T.unwords fs
@@ -278,11 +283,13 @@ list _ = do
 -- | Evaluate KawaiiLang.
 eval :: Func
 eval str = do
-    (Keeper server configt current) <- get
+    current <- get
+    let configt = currConfigTMVar current
+        server = currServ current
     funcs <- fmap (confFuncs . fst) $ liftIO $ atomically $ readTMVar configt
     let edest = currDest current
         e = flip fmap edest $ \chan -> do
-            let parser = botparser (chanPrefix chan) (M.keys funcs)
+            let parser = botparser (stChanPrefix chan) (M.keys funcs)
                 mkl = A.maybeResult . flip A.feed "" $ A.parse parser str
                 me = flip fmap mkl $ compile funcs
             maybe (return "") id me
@@ -295,7 +302,7 @@ eval str = do
 -- | Global message.
 glob :: Func
 glob str = whenStat (>= AdminStat) $ do
-    tmvar <- gets $ keepConfigTMVar
+    tmvar <- gets $ currConfigTMVar
     mhs <- fmap snd $ liftIO $ atomically $ readTMVar tmvar
     void . forkMi $ forM_ (M.elems mhs) $ \h -> do
         e <- liftIO $ do
@@ -313,7 +320,7 @@ glob str = whenStat (>= AdminStat) $ do
 -- | Greeting from the bot.
 greet :: Func
 greet str = do
-    tmvar <- gets keepConfigTMVar
+    tmvar <- gets currConfigTMVar
     dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
     mgreets <- readConfig $ dir <> "greet"
     let len = maybe 0 length mgreets
@@ -326,7 +333,7 @@ greet str = do
 help :: Func
 help str = do
     let str' = T.strip $ T.toLower str
-    tmvar <- gets keepConfigTMVar
+    tmvar <- gets currConfigTMVar
     dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
     helps <- readConfig $ dir <> "help"
     let mhelp = join $ M.lookup str <$> helps
@@ -337,11 +344,11 @@ help str = do
 -- | Search the bot's logs and return a matching message if any.
 history :: Func
 history str = do
-    tmvar <- gets keepConfigTMVar
-    host <- servHost <$> gets keepServ
-    edest <- currDest <$> gets keepCurrent
+    tmvar <- gets currConfigTMVar
+    host <- stServHost <$> gets currServ
+    edest <- gets currDest
     path <- fmap (confLogPath . fst) $ liftIO $ atomically $ readTMVar tmvar
-    let dest = T.unpack $ either userNick chanName edest
+    let dest = T.unpack $ either userNick stChanName edest
         path' = path <> host <> " " <> dest
         (tn, str') = T.break (== ' ') $ T.stripStart str
         mn = readMay $ T.unpack tn :: Maybe Int
@@ -413,17 +420,17 @@ manga str = do
 -- | Set the channel mode.
 mode :: Func
 mode str = whenStat (>= OpStat) $ do
-    edest <- gets $ currDest . keepCurrent
+    edest <- gets $ currDest
     let e = flip fmap edest $ write . fullmode
     either (const $ return "") (>> return "") e
   where
     (m, s) = T.break (== ' ') $ T.strip str
-    fullmode c = "MODE " <> m <> " " <> chanName c <> " " <> s
+    fullmode c = "MODE " <> m <> " " <> stChanName c <> " " <> s
 
 -- | Send a private message to the user.
 priv :: Func
 priv str = do
-    nick <- gets $ userNick . currUser . keepCurrent
+    nick <- gets $ userNick . currUser
     write $ "PRIVMSG " <> nick <> " :" <> str
     return ""
 
@@ -539,8 +546,8 @@ sed str = do
 -- | `set' lets the user change settings, such as the `UserStat' of a user.
 set :: Func
 set str = whenStat (>= OpStat) $ do
-    server <- gets keepServ
-    tmvar <- gets keepConfigTMVar
+    server <- gets currServ
+    tmvar <- gets currConfigTMVar
     config <- liftIO $ atomically $ readTMVar tmvar
     liftIO $ print triple
     case triple of
@@ -582,7 +589,7 @@ set str = whenStat (>= OpStat) $ do
             return $ either id (const "") e
         ("ServBotNick", arg, value) -> do
             -- TODO only allow valid nicks
-            -- let mh = servHost server `M.lookup` snd config
+            -- let mh = stServHost server `M.lookup` snd config
             return . T.pack $ show value
         ("Channel", arg, value) -> return ""
         _ -> return $ "Not a key. Keys: " <> T.intercalate ", " keys
@@ -601,8 +608,6 @@ set str = whenStat (>= OpStat) $ do
            , "ConfVerbosity"
            ]
 
--- XXX Maximum delay?
---      - 5 years?
 -- | Delay a function by n seconds.
 sleep :: Func
 sleep str = do
@@ -614,24 +619,22 @@ sleep str = do
 
 -- TODO
 -- XXX Admin or above required
---      - Why the fuck?
 --      - Okay, maybe Op? Or just User...
--- Isn't this what `let' is supposed to do?
+--     Isn't this what `let' is supposed to do?
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
 store str = return ""
 
--- TODO is there really anything left to do
 -- | Store a message for a user that is printed when they talk next.
 tell :: Func
 tell str = do
-    serv <- gets $ servHost . keepServ
-    edest <- gets $ currDest . keepCurrent
-    cnick <- gets $ userNick . currUser . keepCurrent
-    tmvar <- gets keepConfigTMVar
+    serv <- gets $ stServHost . currServ
+    edest <- gets $ currDest
+    cnick <- gets $ userNick . currUser
+    tmvar <- gets currConfigTMVar
     dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
     mtells <- readConfig $ dir <> "tell"
-    let dest = either userName chanName edest
+    let dest = either userName stChanName edest
         mchans = join $ M.lookup serv <$> mtells
         musers = join $ M.lookup dest <$> mchans
         mtexts = join $ M.lookup nick <$> musers
@@ -665,12 +668,12 @@ title str = do
 -- | Channel topic changing function.
 topic :: Func
 topic str = whenStat (>= OpStat) $ do
-    edest <- gets $ currDest . keepCurrent
+    edest <- gets $ currDest
     let e = flip fmap edest $ \c -> do
-        let t = modder $ chanTopic c
-        unless (t == chanTopic c) $ do
-            write $ "TOPIC " <> chanName c <> " :" <> t
-            write $ "TOPIC " <> chanName c
+        let t = modder $ stChanTopic c
+        unless (t == stChanTopic c) $ do
+            write $ "TOPIC " <> stChanName c <> " :" <> t
+            write $ "TOPIC " <> stChanName c
         return t
     either (const $ return "") id e
   where
@@ -710,15 +713,14 @@ urbandict str = do
 -- | Print the channel's userlist.
 userlist :: Func
 userlist _ = whenStat (>= OpStat) $ do
-    edest <- gets $ currDest . keepCurrent
-    users <- gets $ M.elems . servUsers . keepServ
-    return $ either userNick (chanNicks users') edest
+    edest <- gets $ currDest
+    users <- gets $ M.elems . stServUsers . currServ
+    return $ either userNick (chanNicks users) edest
   where
-    chanNicks us c = let nicks = filter (M.member (chanName c) . userChans) us
+    chanNicks us c = let nicks = filter (M.member (stChanName c) . userChans) us
                          nicks' = filter ((/= OfflineStat) . userStat) nicks
                      in T.unwords $ map userNick nicks'
 
--- TODO multiple nicks
 -- | Give voice to users.
 voice :: Func
 voice str = mode $ "+" <> vs <> " " <> T.unwords nicks

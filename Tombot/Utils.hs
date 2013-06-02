@@ -35,11 +35,14 @@ import Network.HTTP.Conduit
 import Network.HTTP.Conduit.Browser
 import Network.HTTP.Types.Status
 
-import System.Timeout
+import System.IO (Handle)
+import System.Timeout (timeout)
 
 import Text.XML.Light
 -- }}}
 
+-- TODO
+-- - Sort all the functions alphabetically.
 
 version :: Text
 version = "Tombot 0.2.0 (the cute :3c)"
@@ -61,79 +64,126 @@ allow :: (a -> b) -> (a -> b) -> Allowed a -> b
 allow f _ (Blacklist a) = f a
 allow _ g (Whitelist a) = g a
 
--- | Modify the server's userlist.
-modUserlist f = do
-    s <- gets $ keepServ
-    puts $ \k -> k { keepServ = s { servUsers = f $ servUsers s } }
+-- TODO Whitelist must have default functions
+defStChan = StChannel { stChanTopic = ""
+                      , stChanJoin = True
+                      , stChanAutoJoin = False
+                      , stChanMode = ""
+                      , stChanPrefix = ":"
+                      , stChanFuncs = Blacklist []
+                      }
 
-whenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
-whenStat p m = do
-    stat <- gets (userStat . currUser . keepCurrent)
-    mwhen (p stat) m
-
-mapChans f user = user { userChans = f $ userChans user }
-
-mapStat f user = user { userStat = f $ userStat user }
+defUser = User { userNick = ""
+               , userName = ""
+               , userHost = ""
+               , userStat = UserStat
+               , userChans = M.empty
+               }
 
 -- | Get the `Channel'.
-getChan :: Text -> Mind (Maybe Channel)
+getChan :: Text -> Mind (Maybe StChannel)
 getChan chan = do
-    server <- gets keepServ
-    let cs = servChans server
+    server <- gets currServ
+    let cs = stServChans server
     return $ M.lookup chan cs
 
--- | Get a Channel record field.
-getChanField :: Text -> (Channel -> a) -> Mind (Maybe a)
+-- | Get a StChannel record field.
+getChanField :: Text -> (StChannel -> a) -> Mind (Maybe a)
 getChanField chan f = do
     channel <- getChan chan
     return $ fmap f channel
 
 getUser :: Text -> Mind (Maybe User)
-getUser nick = gets keepServ >>= return . M.lookup nick . servUsers
+getUser nick = gets currServ >>= return . M.lookup nick . stServUsers
+
+mapChans f user = user { userChans = f $ userChans user }
+
+mapStat f user = user { userStat = f $ userStat user }
+
+-- | Modify the server's userlist.
+modUserlist f = do
+    s <- gets $ currServ
+    puts $ \k -> k { currServ = s { stServUsers = f $ stServUsers s } }
 
 -- | Modify `Channel' data.
-modChan :: Text -> (Channel -> Channel) -> Mind (Either Text ())
+modChan :: Text -> (StChannel -> StChannel) -> Mind (Either Text ())
 modChan chan f = do
-    server <- gets keepServ
-    let cs = servChans server
+    server <- gets currServ
+    let cs = stServChans server
         mc = M.lookup chan cs
         ec = note ("No channel: " <> chan) mc
         cs' = maybe cs (flip (M.insert chan) cs . f) mc
-    puts $ \k -> k { keepServ = server { servChans = cs' } }
+    puts $ \k -> k { currServ = server { stServChans = cs' } }
     return $ void ec
 
 -- | Change the topic of a channel.
 modChanTopic :: Text -> (Text -> Text) -> Mind (Either Text ())
-modChanTopic chan f = modChan chan $ \c -> c { chanTopic = f $ chanTopic c }
+modChanTopic chan f = modChan chan $ \c -> c { stChanTopic = f $ stChanTopic c }
 
 -- | Change the Funcs of a channel.
 modChanFuncs :: Text -- ^ Channel
              -> (Allowed [Text] -> Allowed [Text]) -> Mind (Either Text ())
-modChanFuncs chan f = modChan chan $ \c -> c { chanFuncs = f $ chanFuncs c }
+modChanFuncs chan f = modChan chan $ \c -> c { stChanFuncs = f $ stChanFuncs c }
 
 -- | Change whether the bot is allowed to join a channel.
 modChanJoin :: Text -> (Bool -> Bool) -> Mind (Either Text ())
-modChanJoin chan f = modChan chan $ \c -> c { chanJoin = f $ chanJoin c }
+modChanJoin chan f = modChan chan $ \c -> c { stChanJoin = f $ stChanJoin c }
 
 -- | Change whether the bot should auto-join on reconnect/kick.
 modChanAutoJoin :: Text -> (Bool -> Bool) -> Mind (Either Text ())
 modChanAutoJoin chan f = modChan chan $ \c ->
-    c { chanAutoJoin = f $ chanAutoJoin c }
+    c { stChanAutoJoin = f $ stChanAutoJoin c }
 
 -- | Change the function prefix characters.
 modChanPrefix :: Text -> ([Char] -> [Char]) -> Mind (Either Text ())
-modChanPrefix chan f = modChan chan $ \c -> c { chanPrefix = f $ chanPrefix c }
+modChanPrefix chan f = modChan chan $ \c -> c { stChanPrefix = f $ stChanPrefix c }
 
 -- | Modify User data.
 modUser :: Text -> (User -> User) -> Mind (Either Text ())
 modUser user f = do
-    server <- gets keepServ
-    let us = servUsers server
+    server <- gets currServ
+    let us = stServUsers server
         mu = M.lookup user us
         eu = note ("No user: " <> user) mu
         us' = maybe us (flip (M.insert user) us . f) mu
-    puts $ \k -> k { keepServ = server { servUsers = us' } }
+    puts $ \k -> k { currServ = server { stServUsers = us' } }
     return $ void eu
+
+-- | From `Channel' to `StChannel'
+toStChan :: Channel -> StChannel
+toStChan (Channel name join ajoin prefix funcs) =
+    let stName = T.pack name
+        stFuncs = map T.pack <$> funcs
+    in StChannel { stChanName = stName
+                 , stChanTopic = ""
+                 , stChanJoin = join
+                 , stChanAutoJoin = ajoin
+                 , stChanMode = ""
+                 , stChanPrefix = prefix
+                 , stChanFuncs = stFuncs
+                 }
+
+-- | From `Server' to `StServer'
+toStServ :: Handle -> Server -> StServer
+toStServ h (Server host port chans nicks name nsid) =
+    let stChans = map (\c -> (T.pack $ chanName c, toStChan c)) chans
+        stNSId = if null nsid then Nothing else Just (T.pack nsid)
+    in StServer { stServHost = host
+                , stServPort = fromIntegral port
+                , stServChans = M.fromList $ stChans
+                , stServBotNicks = map T.pack nicks
+                , stServBotName = T.pack name
+                , stServNickServId = stNSId
+                , stServHandle = h
+                , stServStat = Connected
+                , stServUsers = M.empty
+                }
+
+-- | When predicate `p' is True, run `m', otherwise return `mempty'.
+whenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
+whenStat p m = do
+    stat <- gets (userStat . currUser)
+    mwhen (p stat) m
 
 
 -- }}}
@@ -147,8 +197,6 @@ try = E.try
 
 -- {{{ Funcs utils
 
--- TODO strip leading whitespace and newlines.
--- TODO rename function
 -- | Try to read a storage file then return the Maybe result.
 readConfig :: (MonadIO m, Read a) => FilePath -> m (Maybe a)
 readConfig path = liftIO $ do
@@ -158,34 +206,34 @@ readConfig path = liftIO $ do
 -- Monoid or Maybe?
 -- | Read a local (to the server and channel) value stored in a file in the
 --   bot's path.
-readLocalStored :: (MonadIO m, Read a) => FilePath -> m (Maybe a)
+readLocalStored :: (Read a) => FilePath -> Mind (Maybe a)
 readLocalStored path = do
-    serv <- gets $ servHost . keepServ
-    edest <- gets $ currDest . keepCurrent
-    tmvar <- gets keepConfigTMVar
+    serv <- gets $ stServHost . currServ
+    edest <- gets currDest
+    tmvar <- gets currConfigTMVar
     dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
     mservers <- readConfig $ dir <> path
-    let dest = either userName chanName edest
+    let dest = either userName stChanName edest
         mchans = join $ M.lookup serv <$> mservers
         mstoreds = join $ M.lookup dest <$> mchans
     return $ mstoreds
 
-modLocalStored :: (MonadIO m, Read a, Read b, Show b)
-               => FilePath -> (a -> b) -> m ()
-modLocalStored path f = do
-    serv <- gets $ servHost . keepServ
-    edest <- gets $ currDest . keepCurrent
-    tmvar <- gets keepConfigTMVar
-    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
-    mservers <- readConfig $ dir <> path
-    let dest = either userName chanName edest
-        mchans = join $ M.lookup serv <$> mtells
-        mstoreds = join $ M.lookup dest <$> mchans
-        storeds = maybe (const $ f mempty) f musers
-        chans = maybe (M.singleton dest users) (M.insert dest users) mchans
-        servers = maybe (M.singleton serv chans) (M.insert serv chans) mtells
-    e <- writeConfig (dir <> "tell") servers
-    either warn id e
+--modLocalStored :: (Read a, Read b, Show b)
+--               => FilePath -> (a -> b) -> Mind ()
+--modLocalStored path f = do
+--    serv <- gets $ stServHost . currServ
+--    edest <- gets currDest
+--    tmvar <- gets currConfigTMVar
+--    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
+--    mservers <- readConfig $ dir <> path
+--    let dest = either userName stChanName edest
+--        mchans = join $ M.lookup serv <$> mservers
+--        mstoreds = join $ M.lookup dest <$> mchans
+--        storeds = fromJust mstoreds
+--        chans = maybe (M.singleton dest storeds) (M.insert dest storeds) mchans
+--        servers = maybe (M.singleton serv chans) (M.insert serv chans) mservers
+--    e <- writeConfig (dir <> "tell") servers
+--    either warn return e
 
 writeConfig :: (MonadIO m, Show a) => FilePath -> a -> m (Either Text ())
 writeConfig path a = liftIO $ do
@@ -275,20 +323,19 @@ warn x = liftIO $ putStrLn $ "\x1b[0;33mWarning " <> show x <> "\x1b[0m"
 verb :: (MonadIO m, Show a) => a -> m ()
 verb x = liftIO $ putStrLn $ "\x1b[1;33mVerbose " <> show x <> "\x1b[0m"
 
+-- TODO check verbosity
 erro :: (MonadIO m, Show a) => a -> m ()
 erro x = liftIO $ putStrLn $ "\x1b[0;31mError " <> show x <> "\x1b[0m"
 
 -- TODO reconnect on no handle
 write :: Text -> Mind ()
 write t = do
-    s <- gets keepServ
-    let eh = note ("No handle: " <> servHost s) $ servHandle s
-        e = flip fmap eh $ \h -> do
-            ex <- liftIO $ E.try $ do
-                T.hPutStrLn h t
-                T.putStrLn $ "\x1b[0;32m" <> t <> "\x1b[0m"
-            either (\e -> warn (e :: SomeException)) return ex
-    either warn void e
+    s <- gets currServ
+    let h = stServHandle s
+    ex <- liftIO $ E.try $ do
+        T.hPutStrLn h t
+        T.putStrLn $ "\x1b[0;32m" <> t <> "\x1b[0m"
+    either (\e -> warn (e :: SomeException)) return ex
 
 putPrivmsg :: Text -> Text -> Mind ()
 putPrivmsg d t = unless (T.null t) $ do
@@ -334,6 +381,7 @@ joinUntil p str (x:strs) = joinUntil' p x str strs
 
 -- {{{ StateT utils
 
+puts :: Monad m => (s -> s) -> StateT s m ()
 puts f = do
     x <- get
     put $ f x
@@ -394,12 +442,12 @@ mapTMVar f t = do
 -- TODO better name; the `Hands' suffix is confusing
 readConfHands :: Mind ConfigHandles
 readConfHands = do
-    configt <- gets keepConfigTMVar
+    configt <- gets currConfigTMVar
     liftIO $ atomically $ readTMVar configt
 
 mapConfHands :: (ConfigHandles -> ConfigHandles) -> Mind ()
 mapConfHands f = do
-    configt <- gets keepConfigTMVar
+    configt <- gets currConfigTMVar
     liftIO $ atomically $ mapTMVar f configt
 
 -- }}}

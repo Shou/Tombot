@@ -1,10 +1,11 @@
 
 {-# LANGUAGE DeriveDataTypeable #-}
--- {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE StandaloneDeriving #-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+-- {-# LANGUAGE FlexibleInstances #-}
+-- {-# LANGUAGE TemplateHaskell #-}
+-- {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Tombot.Types where
 
@@ -14,9 +15,12 @@ import Control.Concurrent.STM.TMVar (TMVar)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Either (EitherT)
 
-import Data.Map (Map)
+import Data.Map (Map, empty)
 import Data.Text (Text)
 import Data.Typeable (Typeable)
+import Data.Typeable.Internal
+
+import Network (PortNumber)
 
 import System.IO (Handle)
 
@@ -28,9 +32,13 @@ import System.IO (Handle)
 -- XXX
 
 
-instance Show (TMVar a) where
-    show _ = "TMVar _"
+-- TODO test this
+instance (Typeable s, Typeable1 m) => Typeable1 (StateT s m) where
+    typeOf1 _ = mkTyCon3 "mtl" "Control.Monad.State.Lazy" "StateT" `mkTyConApp` [typeOf (undefined :: s), typeOf1 (undefined :: m a)]
 
+instance Functor Allowed where
+    fmap f (Blacklist a) = Blacklist $ f a
+    fmap f (Whitelist a) = Whitelist $ f a
 
 data UserStatus = OfflineStat
                 | BannedStat
@@ -68,14 +76,22 @@ data User = User { userNick :: Text
 
 -- XXX what else should a `Channel' hold?
 -- NOTE rejoin on kick with `chanJoin = True`; don't join at all if `False`.
-data Channel = Channel { chanName :: Text
-                       , chanTopic :: Text
+data Channel = Channel { chanName :: String
                        , chanJoin :: Bool
                        , chanAutoJoin :: Bool
-                       , chanMode :: Text
                        , chanPrefix :: [Char]
-                       , chanFuncs :: Allowed [Text]
+                       , chanFuncs :: Allowed [String]
                        } deriving (Show)
+
+-- | Data that's not supposed to be used in Config.
+data StChannel = StChannel { stChanName :: Text
+                           , stChanTopic :: Text
+                           , stChanJoin :: Bool
+                           , stChanAutoJoin :: Bool
+                           , stChanMode :: Text
+                           , stChanPrefix :: [Char]
+                           , stChanFuncs :: Allowed [Text]
+                           } deriving (Show)
 
 data Allowed a = Blacklist a
                | Whitelist a
@@ -98,67 +114,92 @@ data ServStatus = Connected
 --     string every time the current nick is in use.
 data Server = Server { servHost :: String
                      , servPort :: Int
-                     , servChans :: Map Text Channel
-                     , servBotNick :: Text
-                     , servBotName :: Text
-                     , servNickServId :: Text
-                     , servHandle :: Maybe Handle
-                     , servStat :: ServStatus
-                     , servUsers :: Map Text User
-                     } deriving (Show, Typeable)
+                     , servChans :: [Channel]
+                     , servBotNicks :: [String]
+                     , servBotName :: String
+                     , servNickServId :: String
+                     } deriving (Show)
 
--- For the sake of convenience
+defServer = Server { servPort = 6667
+                   , servChans = []
+                   , servBotNicks = [ "A_Cool_Bot", "Some_Cool_Bot" ]
+                   , servBotName = "CoolBot"
+                   , servNickServId = ""
+                   }
+
+data StServer = StServer { stServHost :: String
+                         , stServPort :: PortNumber
+                         , stServChans :: Map Text StChannel
+                         , stServBotNicks :: [Text]
+                         , stServBotName :: Text
+                         , stServNickServId :: Maybe Text
+                         , stServHandle :: Handle
+                         , stServStat :: ServStatus
+                         , stServUsers :: Map Text User
+                         } deriving (Show)
+
+-- XXX should we split currConfigTMVar up?
 data Current = Current { currUser :: User
                        , currMode :: Text
-                       , currServ :: String
-                       , currDest :: Either User Channel
-                       } deriving (Show, Typeable)
+                       , currServ :: StServer
+                       , currDest :: Either User StChannel
+                       , currConfigTMVar :: TMVar (Config, Map String Handle)
+                       } deriving (Typeable)
 
--- XXX How to do config paths?
---      - A general function that simplifies the process of checking for
---        existence, permissions, etc?
---      - Data that associates a function with a path?
+-- XXX we can remove `confModules' and `confDir', can't we?
+--     If we just store the funcs in Config.hs, I see no reason not to.
 data Config = Config { confVerbosity :: Int
+                     -- ^ Verbosity level.
+                     -- 0: None
+                     -- 1: Warnings
+                     -- 2: Verbose
                      , confLogging :: Bool
                      , confLogPath :: FilePath
                      , confPath :: FilePath
                      , confDir :: FilePath
                      , confModules :: [FilePath]
-                     , confFuncs :: Map Text Func
+                     , confFuncs :: Funcs
                      } deriving (Typeable)
 
--- TODO better name for this?
-data Keeper = Keeper { keepServ :: Server
-                     , keepConfigTMVar :: TMVar (Config, Map String Handle)
-                     , keepCurrent :: Current
-                     }
+-- TODO
+-- XXX what exactly should be "default"?
+defConfig = Config { confVerbosity = 1
+                   , confLogging = False
+                   , confLogPath = ""
+                   , confPath = ""
+                   , confDir = ""
+                   , confModules = []
+                   , confFuncs = empty
+                   }
 
--- XXX Perhaps there is a way to add the modifications made to Current to
---     Config in a better way?
-type Mind = StateT Keeper IO
-type Decide e a = EitherT e IO a
+data StConfig = StConfig { stConfVerb :: Int
+                         , stConfLog :: Bool
+                         , stConfLogPath :: FilePath
+                         , stConfPath :: FilePath
+                         , stConfDir :: FilePath
+                         , stConfMods :: [FilePath]
+                         , stConfFuncs :: Funcs
+                         , stConfHandles :: Map String Handle
+                         }
 
-{-
--- TODO ugh pls ask #haskell
--- we can at least work around the issue by making the `Funcs' into
--- `Keeper -> Text -> IO Text'.
-deriving instance Typeable (StateT Text IO Text)
--}
-
-type ConfigHandles = (Config, Map String Handle)
+type Mind = StateT Current IO
+type Decide e a = EitherT e Mind a
 
 type Funcs = Map Text Func
 type Func = Text -> Mind Text
 
+type ConfigHandles = (Config, Map String Handle)
+
 -- TODO nicer way to do `Event' data
-data MEvent = MEvent (Mind (Maybe String, MEvent))
+data StEvent = StEvent (Mind (Maybe String, StEvent))
 
 data Event = Event { evtServs :: [Server]
-                   , evtMethod :: MEvent
+                   , evtMethod :: StEvent
                    }
 
 
 -- XXX User data?
+--     wat
 -- {{{ IRC
 data IRC = Nick { nickNick :: Text
                 , nickName :: Text
