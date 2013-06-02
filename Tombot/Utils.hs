@@ -1,6 +1,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# OPTIONS_GHC -fno-warn-overlapping-patterns #-}
 
 module Tombot.Utils where
 
@@ -64,13 +65,13 @@ allow :: (a -> b) -> (a -> b) -> Allowed a -> b
 allow f _ (Blacklist a) = f a
 allow _ g (Whitelist a) = g a
 
--- TODO Whitelist must have default functions
-defStChan = StChannel { stChanTopic = ""
-                      , stChanJoin = True
+defStChan = StChannel { stChanName = ""
+                      , stChanTopic = ""
+                      , stChanJoin = False
                       , stChanAutoJoin = False
                       , stChanMode = ""
                       , stChanPrefix = ":"
-                      , stChanFuncs = Blacklist []
+                      , stChanFuncs = Whitelist []
                       }
 
 defUser = User { userNick = ""
@@ -163,6 +164,17 @@ toStChan (Channel name join ajoin prefix funcs) =
                  , stChanFuncs = stFuncs
                  }
 
+-- | From `Config' to `StConfig'
+toStConf :: Config -> StConfig
+toStConf (Config v d lg lp p fs) = StConfig { stConfVerb = v
+                                            , stConfDir = d
+                                            , stConfLog = lg
+                                            , stConfLogPath = lp
+                                            , stConfPath = p
+                                            , stConfFuncs = fs
+                                            , stConfHandles = M.empty
+                                            }
+
 -- | From `Server' to `StServer'
 toStServ :: Handle -> Server -> StServer
 toStServ h (Server host port chans nicks name nsid) =
@@ -198,8 +210,8 @@ try = E.try
 -- {{{ Funcs utils
 
 -- | Try to read a storage file then return the Maybe result.
-readConfig :: (MonadIO m, Read a) => FilePath -> m (Maybe a)
-readConfig path = liftIO $ do
+readConf :: (MonadIO m, Read a) => FilePath -> m (Maybe a)
+readConf path = liftIO $ do
     ms <- fmap hush . try $ readFile path
     return $! join $ readMay <$> ms
 
@@ -210,9 +222,8 @@ readLocalStored :: (Read a) => FilePath -> Mind (Maybe a)
 readLocalStored path = do
     serv <- gets $ stServHost . currServ
     edest <- gets currDest
-    tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
-    mservers <- readConfig $ dir <> path
+    dir <- stConfDir <$> readConfig
+    mservers <- readConf $ dir <> path
     let dest = either userName stChanName edest
         mchans = join $ M.lookup serv <$> mservers
         mstoreds = join $ M.lookup dest <$> mchans
@@ -224,8 +235,8 @@ readLocalStored path = do
 --    serv <- gets $ stServHost . currServ
 --    edest <- gets currDest
 --    tmvar <- gets currConfigTMVar
---    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
---    mservers <- readConfig $ dir <> path
+--    dir <- liftIO . fmap (stConfDir . fst) . atomically $ readTMVar tmvar
+--    mservers <- readConf $ dir <> path
 --    let dest = either userName stChanName edest
 --        mchans = join $ M.lookup serv <$> mservers
 --        mstoreds = join $ M.lookup dest <$> mchans
@@ -439,14 +450,13 @@ mapTMVar f t = do
     a <- takeTMVar t
     putTMVar t $ f a
 
--- TODO better name; the `Hands' suffix is confusing
-readConfHands :: Mind ConfigHandles
-readConfHands = do
+readConfig :: Mind StConfig
+readConfig = do
     configt <- gets currConfigTMVar
     liftIO $ atomically $ readTMVar configt
 
-mapConfHands :: (ConfigHandles -> ConfigHandles) -> Mind ()
-mapConfHands f = do
+mapConfig :: (StConfig -> StConfig) -> Mind ()
+mapConfig f = do
     configt <- gets currConfigTMVar
     liftIO $ atomically $ mapTMVar f configt
 

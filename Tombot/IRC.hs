@@ -181,7 +181,7 @@ runLang (Privmsg nick name host d t) = do
     current <- get
     let server = currServ current
         configt = currConfigTMVar current
-    funcs <- fmap (confFuncs . fst) $ liftIO $ atomically $ readTMVar configt
+    funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
     let echan = note ("No channel: " <> d) $ M.lookup d $ stServChans server
         e = flip fmap echan $ \chan -> do
         let parser = botparser (stChanPrefix chan) (M.keys funcs)
@@ -196,8 +196,8 @@ printTell :: IRC -> Mind ()
 printTell (Privmsg nick _ _ dest text) = do
     serv <- gets $ stServHost . currServ
     tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
-    mtells <- readConfig $ dir <> "tell"
+    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    mtells <- readConf $ dir <> "tell"
     let mchans = join $ M.lookup serv <$> mtells
         musers = join $ M.lookup dest <$> mchans
         mtexts = join $ M.lookup nick <$> musers

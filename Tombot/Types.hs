@@ -15,7 +15,7 @@ import Control.Concurrent.STM.TMVar (TMVar)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Either (EitherT)
 
-import Data.Map (Map, empty)
+import Data.Map (Map)
 import Data.Text (Text)
 import Data.Typeable (Typeable)
 import Data.Typeable.Internal
@@ -120,13 +120,6 @@ data Server = Server { servHost :: String
                      , servNickServId :: String
                      } deriving (Show)
 
-defServer = Server { servPort = 6667
-                   , servChans = []
-                   , servBotNicks = [ "A_Cool_Bot", "Some_Cool_Bot" ]
-                   , servBotName = "CoolBot"
-                   , servNickServId = ""
-                   }
-
 data StServer = StServer { stServHost :: String
                          , stServPort :: PortNumber
                          , stServChans :: Map Text StChannel
@@ -143,7 +136,7 @@ data Current = Current { currUser :: User
                        , currMode :: Text
                        , currServ :: StServer
                        , currDest :: Either User StChannel
-                       , currConfigTMVar :: TMVar (Config, Map String Handle)
+                       , currConfigTMVar :: TMVar StConfig
                        } deriving (Typeable)
 
 -- XXX we can remove `confModules' and `confDir', can't we?
@@ -153,31 +146,18 @@ data Config = Config { confVerbosity :: Int
                      -- 0: None
                      -- 1: Warnings
                      -- 2: Verbose
+                     , confDir :: FilePath
                      , confLogging :: Bool
                      , confLogPath :: FilePath
                      , confPath :: FilePath
-                     , confDir :: FilePath
-                     , confModules :: [FilePath]
                      , confFuncs :: Funcs
                      } deriving (Typeable)
 
--- TODO
--- XXX what exactly should be "default"?
-defConfig = Config { confVerbosity = 1
-                   , confLogging = False
-                   , confLogPath = ""
-                   , confPath = ""
-                   , confDir = ""
-                   , confModules = []
-                   , confFuncs = empty
-                   }
-
 data StConfig = StConfig { stConfVerb :: Int
+                         , stConfDir :: FilePath
                          , stConfLog :: Bool
                          , stConfLogPath :: FilePath
                          , stConfPath :: FilePath
-                         , stConfDir :: FilePath
-                         , stConfMods :: [FilePath]
                          , stConfFuncs :: Funcs
                          , stConfHandles :: Map String Handle
                          }
@@ -187,8 +167,6 @@ type Decide e a = EitherT e Mind a
 
 type Funcs = Map Text Func
 type Func = Text -> Mind Text
-
-type ConfigHandles = (Config, Map String Handle)
 
 -- TODO nicer way to do `Event' data
 data StEvent = StEvent (Mind (Maybe String, StEvent))

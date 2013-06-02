@@ -57,6 +57,7 @@ funcs = M.fromList [ ("b", ban)
                    , ("v", voice)
                    , ("an", anime)
                    , ("ma", manga)
+                   , ("r", reload)
                    , ("^", history)
                    , ("ai", airing)
                    , ("dict", dict)
@@ -185,8 +186,8 @@ britify :: Func
 britify str = do
     tmvar <- gets $ currConfigTMVar
     bs <- liftIO $ do
-        dir <- atomically $ confDir . fst <$> readTMVar tmvar
-        ml <- readConfig $ dir <> "britify"
+        dir <- atomically $ stConfDir <$> readTMVar tmvar
+        ml <- readConf $ dir <> "britify"
         return $ maybe [] id ml
     return $ wordReplace str bs
 
@@ -201,8 +202,8 @@ cutify :: Func
 cutify str = do
     tmvar <- gets $ currConfigTMVar
     bs <- liftIO $ do
-        dir <- atomically $ confDir . fst <$> readTMVar tmvar
-        ml <- readConfig $ dir <> "cutify"
+        dir <- atomically $ stConfDir <$> readTMVar tmvar
+        ml <- readConf $ dir <> "cutify"
         return $ maybe [] id ml
     return $ wordReplace str bs
 
@@ -273,7 +274,7 @@ list :: Func
 list _ = do
     edest <- gets $ currDest
     tmvar <- gets currConfigTMVar
-    funcs <- fmap (confFuncs . fst) . liftIO $ atomically $ readTMVar tmvar
+    funcs <- fmap (stConfFuncs) . liftIO $ atomically $ readTMVar tmvar
     let ea = fmap stChanFuncs edest
         ef = flip fmap ea $ allow (M.keys funcs \\) id
         fs = either (const []) id ef
@@ -286,7 +287,7 @@ eval str = do
     current <- get
     let configt = currConfigTMVar current
         server = currServ current
-    funcs <- fmap (confFuncs . fst) $ liftIO $ atomically $ readTMVar configt
+    funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
     let edest = currDest current
         e = flip fmap edest $ \chan -> do
             let parser = botparser (stChanPrefix chan) (M.keys funcs)
@@ -303,7 +304,7 @@ eval str = do
 glob :: Func
 glob str = whenStat (>= AdminStat) $ do
     tmvar <- gets $ currConfigTMVar
-    mhs <- fmap snd $ liftIO $ atomically $ readTMVar tmvar
+    mhs <- fmap stConfHandles $ liftIO $ atomically $ readTMVar tmvar
     void . forkMi $ forM_ (M.elems mhs) $ \h -> do
         e <- liftIO $ do
             n <- randomRIO (3, 6)
@@ -321,8 +322,8 @@ glob str = whenStat (>= AdminStat) $ do
 greet :: Func
 greet str = do
     tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
-    mgreets <- readConfig $ dir <> "greet"
+    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    mgreets <- readConf $ dir <> "greet"
     let len = maybe 0 length mgreets
     n <- liftIO $ randomRIO (0, len - 1)
     return $ maybe "" (flip (atDef "") n) mgreets
@@ -334,8 +335,8 @@ help :: Func
 help str = do
     let str' = T.strip $ T.toLower str
     tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
-    helps <- readConfig $ dir <> "help"
+    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    helps <- readConf $ dir <> "help"
     let mhelp = join $ M.lookup str <$> helps
     return $ maybe "" id mhelp
 
@@ -347,7 +348,7 @@ history str = do
     tmvar <- gets currConfigTMVar
     host <- stServHost <$> gets currServ
     edest <- gets currDest
-    path <- fmap (confLogPath . fst) $ liftIO $ atomically $ readTMVar tmvar
+    path <- fmap stConfLogPath $ liftIO $ atomically $ readTMVar tmvar
     let dest = T.unpack $ either userNick stChanName edest
         path' = path <> host <> " " <> dest
         (tn, str') = T.break (== ' ') $ T.stripStart str
@@ -463,15 +464,14 @@ raw str = whenStat (>= AdminStat) $ write str >> return ""
 -- | Reload the bot's Config and Funcs.
 reload :: Func
 reload _ = whenStat (>= AdminStat) $ do
-    confpath <- confPath . fst <$> readConfHands
+    confpath <- stConfPath <$> readConfig
     ec <- loadModules [confpath] ["Config"] "config" (H.as :: Config)
     let e = flip fmap ec $ \config -> do
         verb $ confVerbosity config
         verb $ confLogging config
         verb $ confPath config
-        verb $ confModules config
         verb $ map fst $ M.toList $ confFuncs config
-        mapConfHands $ first (const config)
+        mapConfig $ const (toStConf config)
         return ""
     either (\x -> warn x >> return "") id e
   where
@@ -501,6 +501,10 @@ respond str = whenStat (>= OpStat) $ do
 reveal :: Func
 reveal str = do
     case double of
+        ("Config", _) -> do
+            t <- gets currConfigTMVar
+            v <- liftIO . atomically $ readTMVar t
+            return . T.pack . show . stConfVerb $ v
         (_, "") -> return "show <key> <argument>"
         ("User", nick) -> getUser nick >>= return . maybe "" (T.pack . show)
         ("Chan", chan) -> getChan chan >>= return . maybe "" (T.pack . show)
@@ -632,8 +636,8 @@ tell str = do
     edest <- gets $ currDest
     cnick <- gets $ userNick . currUser
     tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap (confDir . fst) . atomically $ readTMVar tmvar
-    mtells <- readConfig $ dir <> "tell"
+    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    mtells <- readConf $ dir <> "tell"
     let dest = either userName stChanName edest
         mchans = join $ M.lookup serv <$> mtells
         musers = join $ M.lookup dest <$> mchans
