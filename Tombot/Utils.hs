@@ -84,7 +84,7 @@ defUser = User { userNick = ""
 -- | Get the `Channel'.
 getChan :: Text -> Mind (Maybe StChannel)
 getChan chan = do
-    server <- gets currServ
+    server <- sees currServ
     let cs = stServChans server
     return $ M.lookup chan cs
 
@@ -95,7 +95,7 @@ getChanField chan f = do
     return $ fmap f channel
 
 getUser :: Text -> Mind (Maybe User)
-getUser nick = gets currServ >>= return . M.lookup nick . stServUsers
+getUser nick = sees currServ >>= return . M.lookup nick . stServUsers
 
 mapChans f user = user { userChans = f $ userChans user }
 
@@ -103,18 +103,18 @@ mapStat f user = user { userStat = f $ userStat user }
 
 -- | Modify the server's userlist.
 modUserlist f = do
-    s <- gets $ currServ
-    puts $ \k -> k { currServ = s { stServUsers = f $ stServUsers s } }
+    s <- sees $ currServ
+    sets $ \k -> k { currServ = s { stServUsers = f $ stServUsers s } }
 
 -- | Modify `Channel' data.
 modChan :: Text -> (StChannel -> StChannel) -> Mind (Either Text ())
 modChan chan f = do
-    server <- gets currServ
+    server <- sees currServ
     let cs = stServChans server
         mc = M.lookup chan cs
         ec = note ("No channel: " <> chan) mc
         cs' = maybe cs (flip (M.insert chan) cs . f) mc
-    puts $ \k -> k { currServ = server { stServChans = cs' } }
+    sets $ \k -> k { currServ = server { stServChans = cs' } }
     return $ void ec
 
 -- | Change the topic of a channel.
@@ -142,12 +142,12 @@ modChanPrefix chan f = modChan chan $ \c -> c { stChanPrefix = f $ stChanPrefix 
 -- | Modify User data.
 modUser :: Text -> (User -> User) -> Mind (Either Text ())
 modUser user f = do
-    server <- gets currServ
+    server <- sees currServ
     let us = stServUsers server
         mu = M.lookup user us
         eu = note ("No user: " <> user) mu
         us' = maybe us (flip (M.insert user) us . f) mu
-    puts $ \k -> k { currServ = server { stServUsers = us' } }
+    sets $ \k -> k { currServ = server { stServUsers = us' } }
     return $ void eu
 
 -- | From `Channel' to `StChannel'
@@ -189,12 +189,13 @@ toStServ h (Server host port chans nicks name nsid) =
                 , stServHandle = h
                 , stServStat = Connected
                 , stServUsers = M.empty
+                , stServThreads = M.empty
                 }
 
 -- | When predicate `p' is True, run `m', otherwise return `mempty'.
 whenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
 whenStat p m = do
-    stat <- gets (userStat . currUser)
+    stat <- sees (userStat . currUser)
     mwhen (p stat) m
 
 
@@ -220,8 +221,8 @@ readConf path = liftIO $ do
 --   bot's path.
 readLocalStored :: (Read a) => FilePath -> Mind (Maybe a)
 readLocalStored path = do
-    serv <- gets $ stServHost . currServ
-    edest <- gets currDest
+    serv <- sees $ stServHost . currServ
+    edest <- sees currDest
     dir <- stConfDir <$> readConfig
     mservers <- readConf $ dir <> path
     let dest = either userName stChanName edest
@@ -229,25 +230,27 @@ readLocalStored path = do
         mstoreds = join $ M.lookup dest <$> mchans
     return $ mstoreds
 
---modLocalStored :: (Read a, Read b, Show b)
---               => FilePath -> (a -> b) -> Mind ()
---modLocalStored path f = do
---    serv <- gets $ stServHost . currServ
---    edest <- gets currDest
---    tmvar <- gets currConfigTMVar
---    dir <- liftIO . fmap (stConfDir . fst) . atomically $ readTMVar tmvar
---    mservers <- readConf $ dir <> path
---    let dest = either userName stChanName edest
---        mchans = join $ M.lookup serv <$> mservers
---        mstoreds = join $ M.lookup dest <$> mchans
---        storeds = fromJust mstoreds
---        chans = maybe (M.singleton dest storeds) (M.insert dest storeds) mchans
---        servers = maybe (M.singleton serv chans) (M.insert serv chans) mservers
---    e <- writeConfig (dir <> "tell") servers
---    either warn return e
+-- | Modify a local (to the server and channel) value stored in a file in the
+--   bot's path.
+--modLocalStored :: (Read a, Show b, Monoid a) =>
+--                  FilePath -> (a -> b) -> Mind ()
+modLocalStored path f = do
+    serv <- sees $ stServHost . currServ
+    edest <- sees currDest
+    dir <- fmap stConfDir readConfig
+    mservers <- readConf $ dir <> path
+    let dest = either userName stChanName edest
+        mchans = join $ M.lookup serv <$> mservers
+        mstoreds = join $ M.lookup dest <$> mchans
+        storeds = maybe (f mempty) f mstoreds
+        chans = maybe (M.singleton dest storeds) (M.insert dest storeds) mchans
+        servers = maybe (M.singleton serv chans) (M.insert serv chans) mservers
+    verb mstoreds >> verb storeds
+    e <- writeConf (dir <> path) servers
+    either warn return e
 
-writeConfig :: (MonadIO m, Show a) => FilePath -> a -> m (Either Text ())
-writeConfig path a = liftIO $ do
+writeConf :: (MonadIO m, Show a) => FilePath -> a -> m (Either Text ())
+writeConf path a = liftIO $ do
     ms <- fmap louder . try $ writeFile path $ show a
     return $! ms
   where
@@ -341,7 +344,7 @@ erro x = liftIO $ putStrLn $ "\x1b[0;31mError " <> show x <> "\x1b[0m"
 -- TODO reconnect on no handle
 write :: Text -> Mind ()
 write t = do
-    s <- gets currServ
+    s <- sees currServ
     let h = stServHandle s
     ex <- liftIO $ E.try $ do
         T.hPutStrLn h t
@@ -352,6 +355,7 @@ putPrivmsg :: Text -> Text -> Mind ()
 putPrivmsg d t = unless (T.null t) $ do
     write . T.take 420 $ "PRIVMSG " <> d <> " :" <> t
 
+forkMi :: Mind () -> Mind ThreadId
 forkMi m = do
     s <- get
     liftIO . forkIO . void $ runStateT m s
@@ -392,14 +396,38 @@ joinUntil p str (x:strs) = joinUntil' p x str strs
 
 -- {{{ StateT utils
 
-puts :: Monad m => (s -> s) -> StateT s m ()
-puts f = do
-    x <- get
-    put $ f x
+-- |
+set :: Current -> Mind ()
+set c = do
+    t <- get
+    void . liftIO . atomically $ swapTMVar t c
+
+-- |
+sets :: (Current -> Current) -> Mind ()
+sets f = do
+    t <- get
+    void . liftIO . atomically $ do
+        v <- readTMVar t
+        swapTMVar t $ f v
+
+-- |
+see :: Mind Current
+see = get >>= liftIO . atomically . readTMVar
+
+-- |
+sees :: (Current -> a) -> Mind a
+sees f = fmap f $ get >>= liftIO . atomically . readTMVar
 
 -- }}}
 
 -- {{{ Text utils
+
+-- | Break on True for `p' and split the matching words from the non-matching.
+wordbreaks :: (Text -> Bool) -> Text -> ([Text], [Text])
+wordbreaks p t = foldr f ([], []) $ T.words t
+  where
+    f x (lacc, racc) | p x = (lacc, x : racc)
+                     | otherwise = (x : lacc, racc)
 
 -- | Replace the first argument using a dictionary where fst is the match and
 -- snd is the replacement. This is semi case insensitive and the result will
@@ -441,6 +469,9 @@ bisect p = fmap tail' . T.break p
     tail' "" = ""
     tail' t = T.tail t
 
+isChan x | T.length x > 0 = T.head x == '#'
+         | otherwise = False
+
 -- }}}
 
 -- {{{ TMVar utils
@@ -452,12 +483,12 @@ mapTMVar f t = do
 
 readConfig :: Mind StConfig
 readConfig = do
-    configt <- gets currConfigTMVar
+    configt <- sees currConfigTMVar
     liftIO $ atomically $ readTMVar configt
 
 mapConfig :: (StConfig -> StConfig) -> Mind ()
 mapConfig f = do
-    configt <- gets currConfigTMVar
+    configt <- sees currConfigTMVar
     liftIO $ atomically $ mapTMVar f configt
 
 -- }}}

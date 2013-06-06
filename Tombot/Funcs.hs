@@ -53,11 +53,10 @@ funcs = M.fromList [ ("b", ban)
                    , ("gay", gay)
                    , ("raw", raw)
                    , ("sed", sed)
-                   , ("set", set)
                    , ("v", voice)
                    , ("an", anime)
                    , ("ma", manga)
-                   , ("r", reload)
+                   , ("set", setv)
                    , ("^", history)
                    , ("ai", airing)
                    , ("dict", dict)
@@ -69,10 +68,12 @@ funcs = M.fromList [ ("b", ban)
                    , ("len", count)
                    , ("let", store)
                    , ("ra", random)
+                   , ("re", remind)
                    , ("tell", tell)
                    , ("wiki", wiki)
                    , ("funcs", list)
                    , ("kb", kickban)
+                   , ("on", respond)
                    , ("about", about)
                    , ("event", event)
                    , ("greet", greet)
@@ -92,12 +93,6 @@ funcs = M.fromList [ ("b", ban)
 about :: Func
 about _ = return ""
 
--- XXX wait, isn't this what `store' is for?
---     or was it `let'?
--- TODO
-alias :: Func
-alias str = return ""
-
 -- TODO filters
 -- | Low level anime releases function, instead returning a list of strings.
 anime' :: Text -> Mind [String]
@@ -106,20 +101,20 @@ anime' str = do
         mn = readMay $ T.unpack tn :: Maybe Int
         n = maybe 10 id mn
         string = maybe str (const str') mn
-    -- TODO filter
-    --let (str', filters) = foldr' sepFilter ("", []) $ words str
+    let (matches, filters) = wordbreaks ((== '-') . T.head) string
         burl = "http://www.nyaa.eu/?page=search&cats=1_37&filter=2&term="
+        search = T.unwords matches
+        filters' = map T.unpack filters
     -- TODO urlEncode'
-    html <- liftIO $ httpGetString (T.unpack $ burl <> string)
+    html <- liftIO $ httpGetString (T.unpack $ burl <> search)
     let elem' = fromMaybeElement $ parseXMLDoc html
         qname = QName "td" Nothing Nothing
         attrs = [Attr (QName "class" Nothing Nothing) "tlistname"]
         elems = findElementsAttrs qname attrs elem'
         -- TODO strip . elemsText
         animes = map (elemsText) elems
-        -- TODO filter
-        --animes' = filter (\x -> not $ any (`isInfixOf` x) filters) animes
-    return $ take n animes
+        animes' = filter (\x -> not $ any (`isInfixOf` x) filters') animes
+    return $ take n animes'
 
 -- | Anime releases function.
 anime :: Text -> Mind Text
@@ -134,9 +129,12 @@ airing str = do
     let (tn, str') = T.break (== ' ') $ T.stripStart str
         mn = readMay $ T.unpack tn :: Maybe Int
         n = maybe 10 id mn
-        string = T.unpack $ maybe str (const str') mn
+        string = maybe str (const str') mn
         url = "http://www.mahou.org/Showtime/?o=ET"
-        isSearch = not $ null string
+        isSearch = not $ T.null string
+        (matches, filters) = wordbreaks ((== '-') . T.head) string
+        search = T.unpack $ T.unwords matches
+        filters' = map T.unpack filters
     content <- httpGetString url
     let elem = fromMaybeElement $ parseXMLDoc content
         qTable = QName "table" Nothing Nothing
@@ -161,10 +159,11 @@ airing str = do
                                     , "\ETX10Company\ETX:", company
                                     ]
             in if isSearch then
-                let search = map (`isInfixOf` map toLower series)
-                in if and . search . words $ map toLower string
-                   then proSearch : acc
-                   else acc
+                let searcher = map (`isInfixOf` map toLower series)
+                in if or $ searcher filters' then acc
+                   else if and . searcher . words $ map toLower search
+                        then proSearch : acc
+                        else acc
                else nonSearch : acc
         mangas = take n $ foldr f [] tds
     return . T.pack $ joinUntil ((>= 400) . length) ", " mangas
@@ -184,11 +183,9 @@ ban str = do
 -- | Replace words with British slang equivalents.
 britify :: Func
 britify str = do
-    tmvar <- gets $ currConfigTMVar
-    bs <- liftIO $ do
-        dir <- atomically $ stConfDir <$> readTMVar tmvar
-        ml <- readConf $ dir <> "britify"
-        return $ maybe [] id ml
+    dir <- fmap stConfDir readConfig
+    ml <- readConf $ dir <> "britify"
+    let bs = maybe [] id ml
     return $ wordReplace str bs
 
 -- XXX what purpose does this function serve
@@ -200,11 +197,9 @@ colorize str = do
 -- | Replace rude/lascivious words with cute ones.
 cutify :: Func
 cutify str = do
-    tmvar <- gets $ currConfigTMVar
-    bs <- liftIO $ do
-        dir <- atomically $ stConfDir <$> readTMVar tmvar
-        ml <- readConf $ dir <> "cutify"
-        return $ maybe [] id ml
+    dir <- fmap stConfDir readConfig
+    ml <- readConf $ dir <> "cutify"
+    let bs = maybe [] id ml
     return $ wordReplace str bs
 
 -- TODO
@@ -231,7 +226,24 @@ echo = return
 -- XXX this needs to be, like eval, right associative.
 -- | Create an event. Useful with `sleep'.
 event :: Func
-event str = whenStat (>= AdminStat) $ return ""
+event str = whenStat (>= AdminStat) $ do
+    edest <- sees $ currDest
+    funcs <- fmap stConfFuncs readConfig
+    let e = flip fmap edest $ \chan -> do
+            tid <- forkMi $ forever $ do
+                let parser = botparser (stChanPrefix chan) (M.keys funcs)
+                    mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
+                    me = flip fmap mkl $ \kl -> void . forkMi $ do
+                        text <- compile funcs kl
+                        putPrivmsg (stChanName chan) text
+                maybe (return ()) id me
+            tids <- sees $ stServThreads . currServ
+            let tids' = M.insert name tid tids
+            sets $ \c -> c { currServ = (currServ c) { stServThreads = tids' } }
+    either warn id e
+    return ""
+  where
+    (name, t) = bisect (== ' ') str
 
 -- | Rainbow text!
 gay :: Func
@@ -252,7 +264,7 @@ gay str = return $ colorize 0 mempty str <> "\ETX"
 -- | Kick a user.
 kick :: Func
 kick str = do
-    edest <- gets $ currDest
+    edest <- sees $ currDest
     let e = flip fmap edest $ write . fullkick
     either (const $ return "") (>> return "") e
   where
@@ -272,8 +284,8 @@ count str = do
 -- | List the available Funcs.
 list :: Func
 list _ = do
-    edest <- gets $ currDest
-    tmvar <- gets currConfigTMVar
+    edest <- sees $ currDest
+    tmvar <- sees currConfigTMVar
     funcs <- fmap (stConfFuncs) . liftIO $ atomically $ readTMVar tmvar
     let ea = fmap stChanFuncs edest
         ef = flip fmap ea $ allow (M.keys funcs \\) id
@@ -284,7 +296,7 @@ list _ = do
 -- | Evaluate KawaiiLang.
 eval :: Func
 eval str = do
-    current <- get
+    current <- see
     let configt = currConfigTMVar current
         server = currServ current
     funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
@@ -303,26 +315,23 @@ eval str = do
 -- | Global message.
 glob :: Func
 glob str = whenStat (>= AdminStat) $ do
-    tmvar <- gets $ currConfigTMVar
-    mhs <- fmap stConfHandles $ liftIO $ atomically $ readTMVar tmvar
-    void . forkMi $ forM_ (M.elems mhs) $ \h -> do
-        e <- liftIO $ do
-            n <- randomRIO (3, 6)
-            e <- E.try $ T.hPutStrLn h $ T.take 420 str
-            threadDelay (10^6 * n)
-            return e
+    tmvar <- sees currConfigTMVar
+    mhs <- fmap stConfHandles . liftIO . atomically $ readTMVar tmvar
+    void . forkMi . forM_ (M.elems mhs) $ \h -> liftIO $ do
+        n <- randomRIO (3, 6)
+        e <- E.try $ T.hPutStrLn h $ T.take 420 str
+        threadDelay (10^6 * n)
         either onerror return e
     return ""
   where
-    onerror :: SomeException -> Mind ()
+    onerror :: SomeException -> IO ()
     onerror e = erro e
 
 -- TODO add more greetings
 -- | Greeting from the bot.
 greet :: Func
 greet str = do
-    tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    dir <- fmap stConfDir readConfig
     mgreets <- readConf $ dir <> "greet"
     let len = maybe 0 length mgreets
     n <- liftIO $ randomRIO (0, len - 1)
@@ -334,8 +343,7 @@ greet str = do
 help :: Func
 help str = do
     let str' = T.strip $ T.toLower str
-    tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    dir <- fmap stConfDir readConfig
     helps <- readConf $ dir <> "help"
     let mhelp = join $ M.lookup str <$> helps
     return $ maybe "" id mhelp
@@ -345,30 +353,31 @@ help str = do
 -- | Search the bot's logs and return a matching message if any.
 history :: Func
 history str = do
-    tmvar <- gets currConfigTMVar
-    host <- stServHost <$> gets currServ
-    edest <- gets currDest
-    path <- fmap stConfLogPath $ liftIO $ atomically $ readTMVar tmvar
-    let dest = T.unpack $ either userNick stChanName edest
-        path' = path <> host <> " " <> dest
+    let (matches, filters) = wordbreaks ((== '-') . T.head) str
         (tn, str') = T.break (== ' ') $ T.stripStart str
         mn = readMay $ T.unpack tn :: Maybe Int
         n = maybe 1 id mn
         string = maybe str (const str') mn
+    host <- stServHost <$> sees currServ
+    edest <- sees currDest
+    path <- fmap stConfLogPath readConfig
+    let dest = T.unpack $ either userNick stChanName edest
+        path' = path <> host <> " " <> dest
     ts <- reverse . T.lines <$> liftIO (T.readFile path')
-    let ts' = flip filter ts $ flip any (T.words str') . flip T.isInfixOf
+    let ts' = do
+            t <- ts
+            guard $ if null matches then True
+                    else all (`T.isInfixOf` t) matches
+            guard $ if null filters then True
+                    else not $ any (`T.isInfixOf` t) filters
+            return t
         mt = ts' `atMay` n
     return $ maybe "" id mt
-  where
-    fil x y | T.null x = True
-            | T.null y = False
-            | T.head x == '-' = T.tail x /= y
-            | otherwise = x == y
 
 -- | Get a HTTP header from a request.
 http :: Func
 http str = do
-    (_, hed, _, _) <- httpGetResponse (T.unpack str)
+    (_, hed, _, _) <- httpGetResponse (T.unpack httpURL)
     return $ maybe "" T.pack $ lookup (T.unpack httpType) hed
   where
     (httpType, httpURL) = bisect (== ' ') str
@@ -384,7 +393,16 @@ isup str = do
 -- TODO
 -- | Kill an event
 kill :: Func
-kill str = return ""
+kill str = do
+    tids <- sees $ stServThreads . currServ
+    let mtid = M.lookup str tids
+        tids' = M.delete str tids
+    maybe noThread dieThread mtid
+    sets $ \c -> c { currServ = (currServ c) { stServThreads = tids' } }
+    return ""
+  where
+    noThread = warn $ "No thread `" <> str <> "'"
+    dieThread = liftIO . killThread
 
 -- TODO filter
 -- | Recent manga releases.
@@ -421,7 +439,7 @@ manga str = do
 -- | Set the channel mode.
 mode :: Func
 mode str = whenStat (>= OpStat) $ do
-    edest <- gets $ currDest
+    edest <- sees $ currDest
     let e = flip fmap edest $ write . fullmode
     either (const $ return "") (>> return "") e
   where
@@ -431,7 +449,7 @@ mode str = whenStat (>= OpStat) $ do
 -- | Send a private message to the user.
 priv :: Func
 priv str = do
-    nick <- gets $ userNick . currUser
+    nick <- sees $ userNick . currUser
     write $ "PRIVMSG " <> nick <> " :" <> str
     return ""
 
@@ -481,10 +499,20 @@ reload _ = whenStat (>= AdminStat) $ do
         H.interpret x as
 
 -- TODO
--- | Remind a user on login.
+-- | Remind a user on join.
 remind :: Func
 remind str = do
+    verb "wat"
+    cnick <- sees $ userNick . currUser
+    verb $ "Remind " <> cnick
+    modLocalStored "remind" $ \nickmap -> if M.member nick nickmap
+                                          then if nick == cnick
+                                               then M.insert nick msg nickmap
+                                               else nickmap
+                                          else M.insert nick msg nickmap
     return ""
+  where
+    (nick, msg) = bisect (== ' ') str
 
 -- TODO
 -- XXX make this right associative
@@ -494,15 +522,30 @@ remind str = do
 -- > :on /http:\/\/\S+/ title \0
 -- > :on /what should i do/i ra Do nothing at all!|S-schlick!|Do your work!|Stop procrastinating!
 respond :: Func
-respond str = whenStat (>= OpStat) $ do
-    return ""
+respond str = whenStat (>= OpStat) $ mwhen (T.length str > 0) $ do
+    dir <- fmap stConfDir readConfig
+    let c = str `T.index` 0
+        m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
+    flip (maybe $ pure "") m $ \(mat, ins, str') -> do
+        modLocalStored "respond" $ M.insert mat (ins, str')
+        return ""
+  where
+    parser :: Char -> Parser (String, Bool, String)
+    parser x = do
+        A.char x
+        (mat, mc) <- manyTillKeep A.anyChar $ escape x
+        ins <- (== 'i') <$> A.try (A.char 'i' <|> pure 'z')
+        A.space
+        str <- T.unpack <$> A.takeText
+        pure (mat <> [mc], ins, str)
+    escape x = A.try $ A.notChar '\\' >>= \c -> A.char x >> return c
 
 -- | Show StateT data.
 reveal :: Func
 reveal str = do
     case double of
         ("Config", _) -> do
-            t <- gets currConfigTMVar
+            t <- sees currConfigTMVar
             v <- liftIO . atomically $ readTMVar t
             return . T.pack . show . stConfVerb $ v
         (_, "") -> return "show <key> <argument>"
@@ -522,17 +565,15 @@ reveal str = do
 --
 -- > .sed s\/apples\/Google\/i I love apples!
 sed :: Func
-sed str = do
-    mwhen (T.length str > 1) $ do
-        let c = str `T.index` 1
-            m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
-        flip (maybe $ pure "") m $ \x@(mat, rep, ins, str') -> do
-            liftIO $ verb x
-            let regex = mkRegexWithOpts mat False ins
-            e <- liftIO $ E.try (pure $! subRegex regex str' rep)
-            case (e :: Either E.SomeException String) of
-                Right a -> pure $ T.pack a
-                Left e -> pure ""
+sed str = mwhen (T.length str > 1) $ do
+    let c = str `T.index` 1
+        m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
+    flip (maybe $ pure "") m $ \(mat, rep, ins, str') -> do
+        let regex = mkRegexWithOpts mat False ins
+        e <- liftIO $ E.try (pure $! subRegex regex str' rep)
+        case (e :: Either SomeException String) of
+            Right a -> pure $ T.pack a
+            Left e -> pure ""
   where
     parser :: Char -> Parser (String, String, Bool, String)
     parser x = do
@@ -548,10 +589,10 @@ sed str = do
 
 -- TODO
 -- | `set' lets the user change settings, such as the `UserStat' of a user.
-set :: Func
-set str = whenStat (>= OpStat) $ do
-    server <- gets currServ
-    tmvar <- gets currConfigTMVar
+setv :: Func
+setv str = whenStat (>= OpStat) $ do
+    server <- sees currServ
+    tmvar <- sees currConfigTMVar
     config <- liftIO $ atomically $ readTMVar tmvar
     liftIO $ print triple
     case triple of
@@ -612,7 +653,7 @@ set str = whenStat (>= OpStat) $ do
            , "ConfVerbosity"
            ]
 
--- | Delay a function by n seconds.
+-- | Delay a function by n seconds where n is a floating point number.
 sleep :: Func
 sleep str = do
     let mn = readMay (T.unpack $ T.strip str) :: Maybe Double
@@ -624,7 +665,7 @@ sleep str = do
 -- TODO
 -- XXX Admin or above required
 --      - Okay, maybe Op? Or just User...
---     Isn't this what `let' is supposed to do?
+-- XXX this is `let'
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
 store str = return ""
@@ -632,11 +673,10 @@ store str = return ""
 -- | Store a message for a user that is printed when they talk next.
 tell :: Func
 tell str = do
-    serv <- gets $ stServHost . currServ
-    edest <- gets $ currDest
-    cnick <- gets $ userNick . currUser
-    tmvar <- gets currConfigTMVar
-    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+    serv <- sees $ stServHost . currServ
+    edest <- sees $ currDest
+    cnick <- sees $ userNick . currUser
+    dir <- fmap stConfDir readConfig
     mtells <- readConf $ dir <> "tell"
     let dest = either userName stChanName edest
         mchans = join $ M.lookup serv <$> mtells
@@ -649,7 +689,7 @@ tell str = do
     liftIO $ do
         print edest
         print cnick
-    e <- writeConfig (dir <> "tell") servers
+    e <- writeConf (dir <> "tell") servers
     return $ either id (const "") e
   where
     (nick, msg') = bisect (== ' ') str
@@ -672,7 +712,7 @@ title str = do
 -- | Channel topic changing function.
 topic :: Func
 topic str = whenStat (>= OpStat) $ do
-    edest <- gets $ currDest
+    edest <- sees $ currDest
     let e = flip fmap edest $ \c -> do
         let t = modder $ stChanTopic c
         unless (t == stChanTopic c) $ do
@@ -717,8 +757,8 @@ urbandict str = do
 -- | Print the channel's userlist.
 userlist :: Func
 userlist _ = whenStat (>= OpStat) $ do
-    edest <- gets $ currDest
-    users <- gets $ M.elems . stServUsers . currServ
+    edest <- sees $ currDest
+    users <- sees $ M.elems . stServUsers . currServ
     return $ either userNick (chanNicks users) edest
   where
     chanNicks us c = let nicks = filter (M.member (stChanName c) . userChans) us

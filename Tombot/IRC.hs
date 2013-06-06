@@ -26,7 +26,10 @@ import Data.Maybe
 import Data.Monoid
 import Data.Text (Text)
 import qualified Data.Text as T
+
+import Text.Regex
 -- }}}
+
 
 -- {{{ Events
 
@@ -79,6 +82,7 @@ onKick _ _ = right ()
 
 -- {{{ Join
 
+-- |
 joinUserlist :: IRC -> Mind ()
 joinUserlist (Join nick name host chan) = do
     modUserlist stChanAdd
@@ -88,6 +92,40 @@ joinUserlist (Join nick name host chan) = do
             cs = M.fromList [(chan, "")]
             us = fromJust $ mu <|> Just (User nick name host UserStat cs)
         in M.insert nick us users
+
+-- TODO limit to one message?
+-- | Remind the user with the user's message.
+remind :: IRC -> Mind ()
+remind (Join cnick name host chan) = do
+    mrems <- readLocalStored "remind"
+    let rems = maybe mempty M.toList mrems
+    forM_ rems $ \(nick, msg) -> when (cnick == nick) $ do
+        putPrivmsg chan $ nick <> ": " <> msg
+
+-- |
+greet :: IRC -> Mind ()
+greet (Join nick name host chan) = void . forkMi $ do
+    liftIO $ threadDelay (10^6*5)
+    putPrivmsg chan "Hi～ :3"
+
+-- |
+adaptJoin :: IRC -> Mind ()
+adaptJoin (Join nick name host chan) = do
+    current <- see
+    server <- sees currServ
+    mc <- sees $ M.lookup chan . stServChans . currServ
+    users <- sees $ stServUsers . currServ
+    let mu = mapChans (M.insert chan "") <$> M.lookup nick users
+        chans = M.fromList [(chan, "")]
+        user = fromJust $ mu <|> Just (User nick name host UserStat chans)
+        edest = if isChan chan
+                then Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
+                else Left user
+        current' = current { currDest = edest
+                           , currUser = user
+                           }
+    modUserlist $ M.insert nick user
+    set current'
 
 -- }}}
 
@@ -137,6 +175,25 @@ partUserlist (Part nick name host chan text) = do
             us = fromJust $ mu <|> Just (User nick name host UserStat cs)
         in M.insert nick us users
 
+-- |
+adaptPart :: IRC -> Mind ()
+adaptPart (Part nick name host chan _) = do
+    current <- see
+    server <- sees currServ
+    mc <- sees $ M.lookup chan . stServChans . currServ
+    users <- sees $ stServUsers . currServ
+    let mu = mapChans (M.insert chan "") <$> M.lookup nick users
+        chans = M.fromList [(chan, "")]
+        user = fromJust $ mu <|> Just (User nick name host UserStat chans)
+        edest = if isChan chan
+                then Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
+                else Left user
+        current' = current { currDest = edest
+                           , currUser = user
+                           }
+    modUserlist $ M.insert nick user
+    set current'
+
 -- }}}
 
 -- {{{ Privmsg
@@ -145,12 +202,12 @@ partUserlist (Part nick name host chan text) = do
 -- TODO put rest of data from Channel in Current.
 -- XXX If it's a private message and the user does not exist, add it.
 --     If it's a channel message and the user does not exist, warn.
-adaptSanae :: IRC -> Mind ()
-adaptSanae (Privmsg nick name host d _) = do
-    current <- get
-    server <- gets currServ
-    mc <- gets $ M.lookup d . stServChans . currServ
-    users <- gets $ stServUsers . currServ
+adaptPriv :: IRC -> Mind ()
+adaptPriv (Privmsg nick name host d _) = do
+    current <- see
+    server <- sees currServ
+    mc <- sees $ M.lookup d . stServChans . currServ
+    users <- sees $ stServUsers . currServ
     let mu = mapChans (M.insert d "") <$> M.lookup nick users
         chans = M.fromList [(d, "")]
         user = fromJust $ mu <|> Just (User nick name host UserStat chans)
@@ -161,15 +218,12 @@ adaptSanae (Privmsg nick name host d _) = do
                            , currUser = user
                            }
     modUserlist $ M.insert nick user
-    put current'
-  where
-    isChan x | T.length x > 0 = T.head x == '#'
-             | otherwise = False
+    set current'
 
 -- | Respond to CTCP VERSION.
 ctcpVersion :: IRC -> Mind ()
 ctcpVersion irc = do
-    current <- get
+    current <- see
     let t = privText irc
         c = either userNick stChanName $ currDest current
         v = "VERSION " <> version
@@ -178,7 +232,7 @@ ctcpVersion irc = do
 -- TODO only fork whe- actually, just put the Keeper data in a TMVar. ???
 runLang :: IRC -> Mind ()
 runLang (Privmsg nick name host d t) = do
-    current <- get
+    current <- see
     let server = currServ current
         configt = currConfigTMVar current
     funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
@@ -194,8 +248,8 @@ runLang (Privmsg nick name host d t) = do
 
 printTell :: IRC -> Mind ()
 printTell (Privmsg nick _ _ dest text) = do
-    serv <- gets $ stServHost . currServ
-    tmvar <- gets currConfigTMVar
+    serv <- sees $ stServHost . currServ
+    tmvar <- sees currConfigTMVar
     dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
     mtells <- readConf $ dir <> "tell"
     let mchans = join $ M.lookup serv <$> mtells
@@ -207,7 +261,7 @@ printTell (Privmsg nick _ _ dest text) = do
         chans = maybe (M.singleton dest users) (M.insert dest users) mchans
         servers = maybe (M.singleton serv chans) (M.insert serv chans) mtells
     when (isJust msg) $ do
-        writeConfig (dir <> "tell") servers
+        writeConf (dir <> "tell") servers
         putPrivmsg dest $ nick <> ", " <> fromJust msg
   where
     maybeTwo :: [Text] -> (Maybe Text, [Text])
@@ -218,6 +272,28 @@ printTell (Privmsg nick _ _ dest text) = do
         in (x', xs)
     maybeTwo (x:y:xs) | T.length (x <> y) < 420 = (Just $ x <> " | " <> y, xs)
                       | otherwise = (Just x, y:xs)
+
+onMatch :: IRC -> Mind ()
+onMatch irc@(Privmsg nick name host dest text) = do
+    dir <- fmap stConfDir readConfig
+    mons <- readLocalStored $ "respond"
+    let ons = maybe mempty M.toList mons
+    forM_ ons $ \(match, (ins, resp)) -> do
+        let regex = mkRegexWithOpts match False ins
+        emins <- try $ return $! matchRegex regex $ T.unpack text
+        let e = flip fmap emins $ \mins -> do
+            let m = flip fmap mins $ \ins -> do
+                -- FIXME who needs indexes larger than 9 anyway?!?!
+                let indexes = [ '\\' : show x | x <- [0 ..]]
+                    replacer = zipWith replace indexes ins
+                    resp' = foldr ($) resp replacer
+                runLang $ irc { privText = T.pack resp' }
+            maybe (return ()) id m
+        either warn id e
+  where
+    try :: IO a -> Mind (Either SomeException a)
+    try = liftIO . E.try
+    replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
 
 -- }}}
 
@@ -237,13 +313,13 @@ quitUserlist (Quit nick name host text) = do
 -- XXX I think this is unnecessary
 addTopic :: IRC -> Mind ()
 addTopic (Topic nick name host chan text) = do
-    server <- gets currServ
+    server <- sees currServ
     let cs = stServChans server
         mc = M.lookup chan cs
         mc' = (\c -> c { stChanTopic = text }) <$> mc
         ec = note ("No channel: " <> chan) mc'
         cs' = either (const $ cs) (flip (M.insert chan) cs) ec
-    puts $ \k -> k { currServ = server { stServChans = cs' } }
+    sets $ \k -> k { currServ = server { stServChans = cs' } }
 
 -- }}}
 

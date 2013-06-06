@@ -11,6 +11,7 @@ module Tombot.Types where
 
 -- {{{ Imports
 
+import Control.Concurrent (ThreadId)
 import Control.Concurrent.STM.TMVar (TMVar)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Either (EitherT)
@@ -129,6 +130,7 @@ data StServer = StServer { stServHost :: String
                          , stServHandle :: Handle
                          , stServStat :: ServStatus
                          , stServUsers :: Map Text User
+                         , stServThreads :: Map Text ThreadId
                          } deriving (Show)
 
 -- XXX should we split currConfigTMVar up?
@@ -162,7 +164,7 @@ data StConfig = StConfig { stConfVerb :: Int
                          , stConfHandles :: Map String Handle
                          }
 
-type Mind = StateT Current IO
+type Mind = StateT (TMVar Current) IO
 type Decide e a = EitherT e Mind a
 
 type Funcs = Map Text Func
@@ -247,6 +249,10 @@ data IRC = Nick { nickNick :: Text
                    , numArgs :: Maybe Text
                    , numText :: Text
                    }
+         | Cap { capSub :: Text
+               , capText :: Text
+               }
          deriving (Show)
+
 -- }}}
 

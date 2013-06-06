@@ -117,7 +117,14 @@ noSpaces f = do
 
 -- | Match against any of the strings in `cmds'.
 cmd :: [Text] -> Parser Text
-cmd cmds = A.choice (zipWith (flip ($)) cmds $ cycle [A.string])
+cmd cmds = A.choice (zipWith (flip ($)) scmds $ cycle [fcmd])
+  where
+    -- sort by length so longer function names are prioritised
+    scmds = sortBy (comparing $ (* (-1)) . T.length) cmds
+    fcmd x = do
+        c <- A.string x
+        if T.all isLetter c then A.skipSpace else A.try A.skipSpace
+        return c
 
 skipPrefix :: [Char] -> Parser ()
 skipPrefix cs = A.skip (`elem` cs)
@@ -129,6 +136,7 @@ oper = Oper <$> A.choice strs <*> pure Kempty
            , A.string "->"
            , A.string "<-"
            , A.string "<>"
+           , A.string "><"
            , A.string ">>"
            ]
 
@@ -157,14 +165,11 @@ args = do
 
 ignoreSpaces = A.skipWhile (== ' ')
 
--- TODO typeOf fs
+-- TODO typeOf fs -- wat
 -- | Match against a full function such as `"> I am (very) hungry."`.
 fullCmd :: [Text] -> Parser KawaiiLang
 fullCmd fs = do
     c <- cmd fs
-    if T.all isLetter c
-    then A.skipSpace
-    else A.try A.skipSpace
     (m, o) <- args
     return $ Func c m o
 
@@ -184,6 +189,13 @@ compile funcs = klToText mempty
         if T.null $ T.strip old
         then klToText mempty kl
         else return old
+    -- And
+    klToText old (Oper "><" kl) = do
+        if T.null $ T.strip old
+        then return mempty
+        else klToText mempty kl >>= \t -> if T.null $ T.strip t
+                                          then return mempty
+                                          else return $ old <> t
     -- Bind
     klToText old (Oper ">>" kl) = klToText mempty kl
     -- Parens
@@ -201,7 +213,7 @@ compile funcs = klToText mempty
                 t <- f args
                 klToText (T.append old t) kl
       where
-        kwhen (Oper "$$" _) = True
+        kwhen (Oper "<-" _) = True
         kwhen _ = False
     klToText old Kempty = pure old
 
@@ -209,7 +221,7 @@ compile funcs = klToText mempty
 
 -- {{{ IRC
 ircparser = A.choice [ nick, mode, quit, ircJoin, part, topic, invite, kick
-                     , privmsg, notice, ping, ircError, numeric
+                     , privmsg, notice, ping, ircError, numeric, cap
                      ]
 
 user = do
@@ -358,5 +370,24 @@ numeric = do
   where
     colonText = A.skipWhile (/= ':') >> A.char ':' >> A.takeText
     cmd = (fmap Just . A.try $ A.takeWhile1 (/= ':')) <|> pure Nothing
+
+-- ":irc.rizon.no CAP Tombot ACK :multi-prefix"
+-- http://www.leeh.co.uk/draft-mitchell-irc-capabilities-02.html
+cap = do
+    A.try $ do
+        A.char ':'
+        A.dropWhile (/= ' ')
+        A.space
+    A.string "CAP"
+    nick <- A.takeWhile1 (/= ' ')
+    A.space
+    A.dropWhile (/= ' ')
+    A.space
+    subcap <- A.choice subcaps
+    text <- A.takeText
+    return $ Cap subcap text
+  where
+    subcaps = ["LS", "LIST", "REQ", "ACK", "NAK", "CLEAR", "END"]
+
 -- }}}
 
