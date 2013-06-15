@@ -44,7 +44,8 @@ import Text.XML.Light
 
 
 funcs :: Map Text Func
-funcs = M.fromList [ ("b", ban)
+funcs = M.fromList [ ("!", ddg)
+                   , ("b", ban)
                    , (">", echo)
                    , ("<", priv)
                    , ("k", kick)
@@ -71,9 +72,11 @@ funcs = M.fromList [ ("b", ban)
                    , ("re", remind)
                    , ("tell", tell)
                    , ("wiki", wiki)
+                   , ("+", modeplus)
                    , ("funcs", list)
                    , ("kb", kickban)
                    , ("on", respond)
+                   , ("-", modeminus)
                    , ("about", about)
                    , ("event", event)
                    , ("greet", greet)
@@ -202,6 +205,14 @@ cutify str = do
     let bs = maybe [] id ml
     return $ wordReplace str bs
 
+ddg :: Func
+ddg str = do
+    let url = T.unpack $ "https://api.duckduckgo.com/?format=json&q=!" <> str
+    (bdy, _, _, _) <- httpGetResponse url
+    return $ T.take 420 . T.pack . show $ bdy
+
+-- XXX should this be able to delete values from ALL files?
+--      - We'd have to make `del' functions for all functions otherwise.
 -- TODO
 -- | Delete something stored with `store'.
 del :: Func
@@ -222,28 +233,31 @@ diff str = return ""
 echo :: Func
 echo = return
 
--- TODO
--- XXX this needs to be, like eval, right associative.
+-- TODO kill threads
+--      - replace `forever' with something else and look for ThreadEvents
 -- | Create an event. Useful with `sleep'.
 event :: Func
-event str = whenStat (>= AdminStat) $ do
+event str = mwhenStat (>= OpStat) $ do
     edest <- sees $ currDest
     funcs <- fmap stConfFuncs readConfig
-    let e = flip fmap edest $ \chan -> do
-            tid <- forkMi $ forever $ do
-                let parser = botparser (stChanPrefix chan) (M.keys funcs)
-                    mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
-                    me = flip fmap mkl $ \kl -> void . forkMi $ do
-                        text <- compile funcs kl
-                        putPrivmsg (stChanName chan) text
-                maybe (return ()) id me
-            tids <- sees $ stServThreads . currServ
-            let tids' = M.insert name tid tids
-            sets $ \c -> c { currServ = (currServ c) { stServThreads = tids' } }
+    let e = flip fmap edest $ \chan -> void . forkMi $ whileAlive $ do
+            let parser = botparser (stChanPrefix chan) (M.keys funcs)
+                mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
+                mt = flip fmap mkl $ compile funcs
+            maybe (void $ kill name) (>>= putPrivmsg (stChanName chan)) mt
     either warn id e
     return ""
   where
     (name, t) = bisect (== ' ') str
+    whileAlive m = do
+        evs <- sees $ stServTKills . currServ
+        if name `elem` evs
+        then do
+            let evs' = filter (/= name) evs
+            sets $ \c -> c { currServ = (currServ c) { stServTKills = evs' } }
+        else do
+            m
+            whileAlive m
 
 -- | Rainbow text!
 gay :: Func
@@ -258,7 +272,7 @@ gay str = return $ colorize 0 mempty str <> "\ETX"
                           acc' = acc <> color <> char'
                           t' = T.tail t
                       in colorize n' acc' t'
-    colors = ["\ETX04", "\ETX07", "\ETX08", "\ETX03", "\ETX02", "\ETX06"]
+    colors = ["\ETX,04", "\ETX,07", "\ETX,08", "\ETX,03", "\ETX,02", "\ETX,06"]
 
 -- TODO several users
 -- | Kick a user.
@@ -276,6 +290,15 @@ kick str = do
 -- | Kick and ban a user.
 kickban :: Func
 kickban str = mapM_ ($ str) [kick, ban] >> return ""
+
+-- TODO
+-- | Kill an event
+kill :: Func
+kill str = mwhenStat (>= OpStat) $ do
+    evs <- sees $ stServTKills . currServ
+    let evs' = if str `elem` evs then evs else str : evs
+    sets $ \c -> c { currServ = (currServ c) { stServTKills = evs' } }
+    return $ "Killed event `" <> str <> "'"
 
 count :: Func
 count str = do
@@ -314,7 +337,7 @@ eval str = do
 -- FIXME this isn't a `raw' replacement!!!
 -- | Global message.
 glob :: Func
-glob str = whenStat (>= AdminStat) $ do
+glob str = mwhenStat (>= AdminStat) $ do
     tmvar <- sees currConfigTMVar
     mhs <- fmap stConfHandles . liftIO . atomically $ readTMVar tmvar
     void . forkMi . forM_ (M.elems mhs) $ \h -> liftIO $ do
@@ -382,27 +405,13 @@ http str = do
   where
     (httpType, httpURL) = bisect (== ' ') str
 
--- TODO
+-- TODO return something based on the status, not the status numeric itself
 -- | Check if a website is up.
 isup :: Func
 isup str = do
     let url = "http://" <> foldr (flip T.replace "") str ["https://", "http://"]
     (_, _, status, _) <- httpGetResponse (T.unpack url)
     return $ T.pack status
-
--- TODO
--- | Kill an event
-kill :: Func
-kill str = do
-    tids <- sees $ stServThreads . currServ
-    let mtid = M.lookup str tids
-        tids' = M.delete str tids
-    maybe noThread dieThread mtid
-    sets $ \c -> c { currServ = (currServ c) { stServThreads = tids' } }
-    return ""
-  where
-    noThread = warn $ "No thread `" <> str <> "'"
-    dieThread = liftIO . killThread
 
 -- TODO filter
 -- | Recent manga releases.
@@ -438,13 +447,21 @@ manga str = do
 
 -- | Set the channel mode.
 mode :: Func
-mode str = whenStat (>= OpStat) $ do
+mode str = mwhenStat (>= OpStat) $ do
     edest <- sees $ currDest
     let e = flip fmap edest $ write . fullmode
     either (const $ return "") (>> return "") e
   where
     (m, s) = T.break (== ' ') $ T.strip str
-    fullmode c = "MODE " <> m <> " " <> stChanName c <> " " <> s
+    fullmode c = "MODE " <> stChanName c <> " " <> m <> " " <> s
+
+-- | Set the channel mode, prepending a +.
+modeplus :: Func
+modeplus str = mode $ "+" <> str
+
+-- | Set the channel mode, prepending a -.
+modeminus :: Func
+modeminus str = mode $ "-" <> str
 
 -- | Send a private message to the user.
 priv :: Func
@@ -475,13 +492,13 @@ random str
 
 -- | Write directly to the IRC handle of the current server.
 raw :: Func
-raw str = whenStat (>= AdminStat) $ write str >> return ""
+raw str = mwhenStat (>= AdminStat) $ write str >> return ""
 
 -- TODO
 -- FIXME this explodes
 -- | Reload the bot's Config and Funcs.
 reload :: Func
-reload _ = whenStat (>= AdminStat) $ do
+reload _ = mwhenStat (>= AdminStat) $ do
     confpath <- stConfPath <$> readConfig
     ec <- loadModules [confpath] ["Config"] "config" (H.as :: Config)
     let e = flip fmap ec $ \config -> do
@@ -522,7 +539,7 @@ remind str = do
 -- > :on /http:\/\/\S+/ title \0
 -- > :on /what should i do/i ra Do nothing at all!|S-schlick!|Do your work!|Stop procrastinating!
 respond :: Func
-respond str = whenStat (>= OpStat) $ mwhen (T.length str > 0) $ do
+respond str = mwhenStat (>= OpStat) $ mwhen (T.length str > 0) $ do
     dir <- fmap stConfDir readConfig
     let c = str `T.index` 0
         m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
@@ -590,7 +607,7 @@ sed str = mwhen (T.length str > 1) $ do
 -- TODO
 -- | `set' lets the user change settings, such as the `UserStat' of a user.
 setv :: Func
-setv str = whenStat (>= OpStat) $ do
+setv str = mwhenStat (>= OpStat) $ do
     server <- sees currServ
     tmvar <- sees currConfigTMVar
     config <- liftIO $ atomically $ readTMVar tmvar
@@ -604,7 +621,7 @@ setv str = whenStat (>= OpStat) $ do
         (_, "", _) -> return "set <key> <argument> = <value>"
         ("UserStat", arg, value) -> do
             let mv = readMay $ T.unpack (value <> "Stat") :: Maybe UserStatus
-            whenStat (> maybe UserStat id mv) $ do
+            mwhenStat (> maybe UserStat id mv) $ do
                 e <- modUser arg $ \u ->
                     let stat = userStat u
                     in u { userStat = maybe stat id mv }
@@ -711,7 +728,7 @@ title str = do
 -- TODO
 -- | Channel topic changing function.
 topic :: Func
-topic str = whenStat (>= OpStat) $ do
+topic str = mwhenStat (>= OpStat) $ do
     edest <- sees $ currDest
     let e = flip fmap edest $ \c -> do
         let t = modder $ stChanTopic c
@@ -756,7 +773,7 @@ urbandict str = do
 
 -- | Print the channel's userlist.
 userlist :: Func
-userlist _ = whenStat (>= OpStat) $ do
+userlist _ = mwhenStat (>= OpStat) $ do
     edest <- sees $ currDest
     users <- sees $ M.elems . stServUsers . currServ
     return $ either userNick (chanNicks users) edest

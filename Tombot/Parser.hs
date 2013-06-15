@@ -1,6 +1,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE TupleSections #-}
 
 module Tombot.Parser (botparser, ircparser, compile) where
 
@@ -65,14 +66,6 @@ khead Kempty = (mempty, mempty)
 khead (Func t0 t1 kl) = (Func t0 t1 mempty, kl)
 khead (Oper t kl) = (Oper t mempty, kl)
 khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
-
-{-
-instance Show KawaiiLang where
-    show Kempty = ""
-    show (Func t0 t1 kl) = unwords [T.unpack t0, show t1, show kl]
-    show (Oper t kl) = unwords [T.unpack t, show kl]
-    show (Parens kl0 kl1) = "( " ++ show kl0 ++ ")" ++ " " ++ show kl1
--}
 
 -- }}}
 
@@ -170,8 +163,12 @@ ignoreSpaces = A.skipWhile (== ' ')
 fullCmd :: [Text] -> Parser KawaiiLang
 fullCmd fs = do
     c <- cmd fs
-    (m, o) <- args
+    (m, o) <- if c `elem` lefts
+              then (, Kempty) <$> A.takeText
+              else args
     return $ Func c m o
+  where
+    lefts = ["eval", "event", "help"]
 
 -- XXX will be Mind Text later on
 -- TODO clean up and split this function
@@ -253,7 +250,7 @@ mode = do
     A.space
     chan <- A.takeWhile (/= ' ')
     A.space
-    mode <- A.takeWhile (/= ' ')
+    mode <- T.unpack <$> A.takeWhile (/= ' ')
     A.space
     text <- Just <$> A.takeText
     return $ Mode nick name host chan mode text
@@ -371,17 +368,18 @@ numeric = do
     colonText = A.skipWhile (/= ':') >> A.char ':' >> A.takeText
     cmd = (fmap Just . A.try $ A.takeWhile1 (/= ':')) <|> pure Nothing
 
+-- ":irc.rizon.no CAP * ACK :multi-prefix"
 -- ":irc.rizon.no CAP Tombot ACK :multi-prefix"
 -- http://www.leeh.co.uk/draft-mitchell-irc-capabilities-02.html
 cap = do
     A.try $ do
         A.char ':'
-        A.dropWhile (/= ' ')
+        A.skipWhile (/= ' ')
         A.space
     A.string "CAP"
     nick <- A.takeWhile1 (/= ' ')
     A.space
-    A.dropWhile (/= ' ')
+    A.skipWhile (/= ' ')
     A.space
     subcap <- A.choice subcaps
     text <- A.takeText

@@ -41,6 +41,9 @@ instance Functor Allowed where
     fmap f (Blacklist a) = Blacklist $ f a
     fmap f (Whitelist a) = Whitelist $ f a
 
+instance Show (TMVar a) where
+    show x = "TMVar _"
+
 data UserStatus = OfflineStat
                 | BannedStat
                 | UserStat
@@ -65,7 +68,7 @@ data Mood = Mood { moodPers :: Personality
                  , moodGrid :: (Int, Int)
                  } deriving (Show)
 
-type Mode = Text
+type Mode = [Char]
 
 -- TODO last activity/online
 data User = User { userNick :: Text
@@ -89,7 +92,7 @@ data StChannel = StChannel { stChanName :: Text
                            , stChanTopic :: Text
                            , stChanJoin :: Bool
                            , stChanAutoJoin :: Bool
-                           , stChanMode :: Text
+                           , stChanMode :: [Char]
                            , stChanPrefix :: [Char]
                            , stChanFuncs :: Allowed [Text]
                            } deriving (Show)
@@ -102,6 +105,16 @@ data Allowed a = Blacklist a
 fromAllowed :: Allowed a -> a
 fromAllowed (Blacklist a) = a
 fromAllowed (Whitelist a) = a
+
+data Assoc a = LeftA a
+             | RightA a
+             | CenterA a
+             deriving (Eq, Show)
+
+fromAssoc :: Assoc a -> a
+fromAssoc (LeftA a) = a
+fromAssoc (RightA a) = a
+fromAssoc (CenterA a) = a
 
 data ServStatus = Connected
                 | Connecting Int
@@ -130,7 +143,7 @@ data StServer = StServer { stServHost :: String
                          , stServHandle :: Handle
                          , stServStat :: ServStatus
                          , stServUsers :: Map Text User
-                         , stServThreads :: Map Text ThreadId
+                         , stServTKills :: [Text]
                          } deriving (Show)
 
 -- XXX should we split currConfigTMVar up?
@@ -177,7 +190,6 @@ data Event = Event { evtServs :: [Server]
                    , evtMethod :: StEvent
                    }
 
-
 -- XXX User data?
 --     wat
 -- {{{ IRC
@@ -190,7 +202,7 @@ data IRC = Nick { nickNick :: Text
                 , modeName :: Text
                 , modeHost :: Text
                 , modeChan :: Text
-                , modeChars :: Text
+                , modeChars :: [Char]
                 , modeText :: Maybe Text
                 }
          | Quit { quitNick :: Text

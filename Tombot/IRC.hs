@@ -20,6 +20,7 @@ import Control.Monad.State
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import Data.List
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
@@ -127,6 +128,10 @@ adaptJoin (Join nick name host chan) = do
     modUserlist $ M.insert nick user
     set current'
 
+modeJoin :: IRC -> Mind ()
+modeJoin (Join nick name host chan) = do
+    write $ "MODE " <> chan
+
 -- }}}
 
 -- {{{ Kick
@@ -145,7 +150,53 @@ kickUserlist (Kick nick name host chans nicks text) = do
 
 -- {{{ Mode
 
+-- TODO
+-- |
+adaptMode :: IRC -> Mind ()
+adaptMode (Mode nick name host chan _ _) = do
+    return ()
 
+-- TODO check if UserMode is less than OP then change UserStat accordingly
+-- TODO move `minus' and `plus' to Utils.
+-- |
+changeMode :: IRC -> Mind ()
+changeMode (Mode nick name host chan chars mtext) =
+    plus chars $ maybe [] T.words mtext
+  where
+    usermodes = "vhoaq"
+    ops = "oaq"
+    plus [] _ = return ()
+    plus ('-':xs) ys = minus xs ys
+    plus (x:xs) ys
+        | any (== x) usermodes && length ys > 0 = do
+            e <- modUser (ys !! 0) $ \u ->
+                let chans = userChans u
+                    chans' = M.adjust (sort . (x :)) chan chans
+                in u { userChans = chans' }
+            either warn return e
+            plus xs $ tail ys
+        | not $ any (== x) usermodes  = do
+            e <- modChan chan $ \c ->
+                c { stChanMode = x : stChanMode c }
+            either warn return e
+            plus xs $ tailSafe ys
+        | otherwise = return ()
+    minus [] _ = return ()
+    minus ('+':xs) ys = plus xs ys
+    minus (x:xs) ys
+        | any (== x) usermodes && length ys > 0 = do
+            e <- modUser (ys !! 0) $ \u ->
+                let chans = userChans u
+                    chans' = M.adjust (filter (/= x)) chan chans
+                in u { userChans = chans' }
+            either warn return e
+            minus xs $ tail ys
+        | not $ any (== x) usermodes  = do
+            e <- modChan chan $ \c ->
+                c { stChanMode = filter (/= x) (stChanMode c) }
+            either warn return e
+            minus xs $ tailSafe ys
+        | otherwise = return ()
 
 -- }}}
 
@@ -320,6 +371,83 @@ addTopic (Topic nick name host chan text) = do
         ec = note ("No channel: " <> chan) mc'
         cs' = either (const $ cs) (flip (M.insert chan) cs) ec
     sets $ \k -> k { currServ = server { stServChans = cs' } }
+
+-- }}}
+
+-- {{{ Invite
+
+-- TODO check chanJoin
+-- |
+joinInv :: IRC -> Mind ()
+joinInv (Invite nick name host dest chan) = do
+    edest <- sees currDest
+    let e = flip fmap edest $ \c -> do
+        mwhen (stChanJoin c) $ write $ "JOIN " <> chan
+    either (warn . noChan . userNick) id e
+  where
+    noChan = ("Not a channel, nick " <>)
+
+-- }}}
+
+-- {{{ Numerics
+
+-- |
+welcomeNum :: IRC -> Mind ()
+welcomeNum _ = do
+    server <- sees currServ
+    let cs = map snd $ M.toList $ stServChans server
+    forM_ cs $ \c -> when (stChanAutoJoin c) $ do
+        write $ "JOIN " <> stChanName c
+    let mpass = stServNickServId server
+    flip (maybe $ return ()) mpass $ \pass -> do
+        putPrivmsg "NickServ" $ "identify " <> pass
+
+-- |
+whoisNum :: IRC -> Mind ()
+whoisNum (Numeric n ma t) = do
+    let ma' = flip fmap ma $ \a -> do
+        let xs = T.words a
+            nick = atDef "" xs 0
+            name = atDef "" xs 1
+            host = atDef "" xs 2
+        e <- modUser nick $ \u -> u { userName = name
+                                    , userHost = host
+                                    }
+        either warn return e
+    maybe (return ()) id ma'
+
+-- |
+topicNum :: IRC -> Mind ()
+topicNum (Numeric n ma t) =
+    if isJust ma
+    then modChanTopic (fromJust ma) (const t) >>= verb
+    else noNumeric "332"
+
+-- |
+userlistNum :: IRC -> Mind ()
+userlistNum (Numeric n ma t) = do
+    server <- sees currServ
+    flip (maybe $ noNumeric "353") ma $ \chan -> do
+    forM_ (T.words t) $ \modenick -> do
+        let (ircmode, nick) = T.break (`notElem` "~&@%+") modenick
+            mode = toMode (T.unpack ircmode)
+            users = stServUsers server
+            mu = mapChans (M.insert chan mode) <$> M.lookup nick users
+            chans = M.fromList [(chan, mode)]
+            isMod = any (`elem` "oaq") mode
+            stat = if isMod then OpStat else UserStat
+            user = fromJust $ mu <|> Just (User nick "" "" stat chans)
+        modUserlist $ M.insert nick user
+        write $ "WHOIS " <> nick
+
+-- |
+modeNum :: IRC -> Mind ()
+modeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
+    let (chan, mode) = dropWhile (== '+') . T.unpack <$> bisect (== ' ') a
+    e <- modChan chan $ \c -> c { stChanMode = mode }
+    either warn return e
+  where
+    noArgs = "No `numArgs' in Numeric " <> n
 
 -- }}}
 

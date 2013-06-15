@@ -189,15 +189,19 @@ toStServ h (Server host port chans nicks name nsid) =
                 , stServHandle = h
                 , stServStat = Connected
                 , stServUsers = M.empty
-                , stServThreads = M.empty
+                , stServTKills = []
                 }
 
 -- | When predicate `p' is True, run `m', otherwise return `mempty'.
-whenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
+whenStat :: (UserStatus -> Bool) -> Mind () -> Mind ()
 whenStat p m = do
     stat <- sees (userStat . currUser)
-    mwhen (p stat) m
+    when (p stat) m
 
+mwhenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
+mwhenStat p m = do
+    stat <- sees (userStat . currUser)
+    mwhen (p stat) m
 
 -- }}}
 
@@ -342,6 +346,7 @@ erro :: (MonadIO m, Show a) => a -> m ()
 erro x = liftIO $ putStrLn $ "\x1b[0;31mError " <> show x <> "\x1b[0m"
 
 -- TODO reconnect on no handle
+-- | Put a message to the current `Server'\'s `Handle'.
 write :: Text -> Mind ()
 write t = do
     s <- sees currServ
@@ -351,14 +356,20 @@ write t = do
         T.putStrLn $ "\x1b[0;32m" <> t <> "\x1b[0m"
     either (\e -> warn (e :: SomeException)) return ex
 
+-- | Put a private message using `write'
 putPrivmsg :: Text -> Text -> Mind ()
 putPrivmsg d t = unless (T.null t) $ do
     write . T.take 420 $ "PRIVMSG " <> d <> " :" <> t
 
+-- | Fork for the Mind monad
 forkMi :: Mind () -> Mind ThreadId
 forkMi m = do
     s <- get
     liftIO . forkIO . void $ runStateT m s
+
+-- |
+noNumeric :: Text -> Mind ()
+noNumeric n = warn $ n <> ": No Numeric argument"
 
 -- }}}
 
@@ -462,15 +473,27 @@ wordReplace str bs = T.unwords $ foldr (replacer bs) [] $ T.words str
            ]
     notAlphabet = flip notElem $ ['a' .. 'z'] ++ ['A' .. 'Z']
 
-ctcp t = "\SOH" <> t <> "\SOH"
-
 bisect p = fmap tail' . T.break p
   where
     tail' "" = ""
     tail' t = T.tail t
 
+-- }}}
+
+-- {{{ IRC Text utils
+
+ctcp t = "\SOH" <> t <> "\SOH"
+
 isChan x | T.length x > 0 = T.head x == '#'
          | otherwise = False
+
+toMode t = map modeChar t
+  where
+    modeChar '~' = 'q'
+    modeChar '&' = 'a'
+    modeChar '@' = 'o'
+    modeChar '%' = 'h'
+    modeChar '+' = 'v'
 
 -- }}}
 
