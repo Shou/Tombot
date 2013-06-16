@@ -131,6 +131,7 @@ oper = Oper <$> A.choice strs <*> pure Kempty
            , A.string "<>"
            , A.string "><"
            , A.string ">>"
+           , A.string "+>"
            ]
 
 inParens :: [Text] -> Parser KawaiiLang
@@ -186,8 +187,15 @@ compile funcs = klToText mempty
         if T.null $ T.strip old
         then klToText mempty kl
         else return old
-    -- And
+    -- And right
     klToText old (Oper "><" kl) = do
+        if T.null $ T.strip old
+        then return mempty
+        else klToText mempty kl >>= \t -> if T.null $ T.strip t
+                                          then return mempty
+                                          else return t
+    -- And
+    klToText old (Oper "+>" kl) = do
         if T.null $ T.strip old
         then return mempty
         else klToText mempty kl >>= \t -> if T.null $ T.strip t

@@ -342,8 +342,6 @@ onMatch irc@(Privmsg nick name host dest text) = do
             maybe (return ()) id m
         either warn id e
   where
-    try :: IO a -> Mind (Either SomeException a)
-    try = liftIO . E.try
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
 
 -- }}}
@@ -392,6 +390,14 @@ joinInv (Invite nick name host dest chan) = do
 -- {{{ Numerics
 
 -- |
+adaptNum :: IRC -> Mind ()
+adaptNum (Numeric n ma t) = flip (maybe $ return ()) ma $ \a -> do
+    mchan <- M.lookup a <$> sees (stServChans . currServ)
+    let user = Left $ User "" "" "" UserStat mempty
+        dest = maybe user Right mchan
+    sets $ \c -> c { currDest = dest }
+
+-- |
 welcomeNum :: IRC -> Mind ()
 welcomeNum _ = do
     server <- sees currServ
@@ -423,22 +429,27 @@ topicNum (Numeric n ma t) =
     then modChanTopic (fromJust ma) (const t) >>= verb
     else noNumeric "332"
 
+-- TODO load `config' file with Server > Channel > Nick
 -- |
 userlistNum :: IRC -> Mind ()
 userlistNum (Numeric n ma t) = do
     server <- sees currServ
     flip (maybe $ noNumeric "353") ma $ \chan -> do
-    forM_ (T.words t) $ \modenick -> do
-        let (ircmode, nick) = T.break (`notElem` "~&@%+") modenick
-            mode = toMode (T.unpack ircmode)
-            users = stServUsers server
-            mu = mapChans (M.insert chan mode) <$> M.lookup nick users
-            chans = M.fromList [(chan, mode)]
-            isMod = any (`elem` "oaq") mode
-            stat = if isMod then OpStat else UserStat
-            user = fromJust $ mu <|> Just (User nick "" "" stat chans)
-        modUserlist $ M.insert nick user
-        write $ "WHOIS " <> nick
+        musers <- readLocalStored "UserStats"
+        forM_ (T.words t) $ \modenick -> do
+            let (ircmode, nick) = T.break (`notElem` "~&@%+") modenick
+                mode = toMode (T.unpack ircmode)
+                users = stServUsers server
+                mu = mapChans (M.insert chan mode) <$> M.lookup nick users
+                chans = M.fromList [(chan, mode)]
+                isMod = any (`elem` "oaq") mode
+                susers = maybe mempty id musers
+                defstat = if isMod then OpStat else UserStat
+                stat = maybe defstat id $ M.lookup nick susers
+                mu' = flip fmap mu $ \u -> u { userStat = stat }
+                user = fromJust $ mu' <|> Just (User nick "" "" stat chans)
+            modUserlist $ M.insert nick user
+            write $ "WHOIS " <> nick
 
 -- |
 modeNum :: IRC -> Mind ()

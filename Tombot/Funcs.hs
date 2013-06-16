@@ -56,10 +56,12 @@ funcs = M.fromList [ ("!", ddg)
                    , ("sed", sed)
                    , ("v", voice)
                    , ("an", anime)
+                   , ("in", match)
                    , ("ma", manga)
                    , ("set", setv)
                    , ("^", history)
                    , ("ai", airing)
+                   , ("bots", bots)
                    , ("dict", dict)
                    , ("eval", eval)
                    , ("help", help)
@@ -183,6 +185,12 @@ ban str = do
     nicks = T.words str
     bs = T.replicate (length nicks) "b"
 
+bots :: Func
+bots _ = do
+    gr <- greet ""
+    ga <- gay "Haskell!"
+    return $ gr <> " " <> ga
+
 -- | Replace words with British slang equivalents.
 britify :: Func
 britify str = do
@@ -233,8 +241,22 @@ diff str = return ""
 echo :: Func
 echo = return
 
--- TODO kill threads
---      - replace `forever' with something else and look for ThreadEvents
+-- | Evaluate KawaiiLang.
+eval :: Func
+eval str = do
+    current <- see
+    let configt = currConfigTMVar current
+        server = currServ current
+    funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
+    let edest = currDest current
+        e = flip fmap edest $ \chan -> do
+            let parser = botparser (stChanPrefix chan) (M.keys funcs)
+                mkl = A.maybeResult . flip A.feed "" $ A.parse parser str
+                me = flip fmap mkl $ compile funcs
+            maybe (return "") id me
+    either (\x -> warn x >> return "") id e
+
+-- TODO kill threads properly
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = mwhenStat (>= OpStat) $ do
@@ -291,18 +313,18 @@ kick str = do
 kickban :: Func
 kickban str = mapM_ ($ str) [kick, ban] >> return ""
 
--- TODO
+-- TODO return "Killed event `name'"
 -- | Kill an event
 kill :: Func
 kill str = mwhenStat (>= OpStat) $ do
     evs <- sees $ stServTKills . currServ
     let evs' = if str `elem` evs then evs else str : evs
     sets $ \c -> c { currServ = (currServ c) { stServTKills = evs' } }
-    return $ "Killed event `" <> str <> "'"
+    return ""
 
+-- | Count characters.
 count :: Func
-count str = do
-    return $ T.pack . show $ T.length str
+count str = return $ T.pack . show $ T.length str
 
 -- | List the available Funcs.
 list :: Func
@@ -315,22 +337,6 @@ list _ = do
         fs = either (const []) id ef
     return $ T.unwords fs
 
--- TODO make this right associative
--- | Evaluate KawaiiLang.
-eval :: Func
-eval str = do
-    current <- see
-    let configt = currConfigTMVar current
-        server = currServ current
-    funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
-    let edest = currDest current
-        e = flip fmap edest $ \chan -> do
-            let parser = botparser (stChanPrefix chan) (M.keys funcs)
-                mkl = A.maybeResult . flip A.feed "" $ A.parse parser str
-                me = flip fmap mkl $ compile funcs
-            maybe (return "") id me
-    either (\x -> warn x >> return "") id e
-
 -- TODO reconnect on Handle error
 --      - Make a function that does this for us.
 -- TODO specify server/channel
@@ -342,13 +348,10 @@ glob str = mwhenStat (>= AdminStat) $ do
     mhs <- fmap stConfHandles . liftIO . atomically $ readTMVar tmvar
     void . forkMi . forM_ (M.elems mhs) $ \h -> liftIO $ do
         n <- randomRIO (3, 6)
-        e <- E.try $ T.hPutStrLn h $ T.take 420 str
+        e <- try $ T.hPutStrLn h $ T.take 420 str
         threadDelay (10^6 * n)
-        either onerror return e
+        either erro return e
     return ""
-  where
-    onerror :: SomeException -> IO ()
-    onerror e = erro e
 
 -- TODO add more greetings
 -- | Greeting from the bot.
@@ -444,6 +447,26 @@ manga str = do
     return . T.pack $ joinUntil ((>= 400) . length) ", " mangas
   where
     strip = T.unpack . T.strip . T.pack
+
+-- | Show whether the regex matches a string.
+match :: Func
+match str = mwhen (T.length str > 0) $ do
+    let c = str `T.index` 0
+        m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
+    flip (maybe $ pure "") m $ \(mat, ins, str') -> do
+        let regex = mkRegexWithOpts mat False ins
+        emins <- try $ return $! matchRegex regex str'
+        either (const $ return "") (return . maybe "" (const "True")) emins
+  where
+    parser :: Char -> Parser (String, Bool, String)
+    parser x = do
+        A.char x
+        (mat, mc) <- manyTillKeep A.anyChar $ escape x
+        ins <- (== 'i') <$> A.try (A.char 'i' <|> pure 'z')
+        A.space
+        str <- T.unpack <$> A.takeText
+        pure (mat <> [mc], ins, str)
+    escape x = A.try $ A.notChar '\\' >>= \c -> A.char x >> return c
 
 -- | Set the channel mode.
 mode :: Func
@@ -587,10 +610,8 @@ sed str = mwhen (T.length str > 1) $ do
         m = A.maybeResult . flip A.feed "" $ A.parse (parser c) str
     flip (maybe $ pure "") m $ \(mat, rep, ins, str') -> do
         let regex = mkRegexWithOpts mat False ins
-        e <- liftIO $ E.try (pure $! subRegex regex str' rep)
-        case (e :: Either SomeException String) of
-            Right a -> pure $ T.pack a
-            Left e -> pure ""
+        e <- liftIO $ try (pure $! subRegex regex str' rep)
+        either (const $ pure "") (pure . T.pack) e
   where
     parser :: Char -> Parser (String, String, Bool, String)
     parser x = do
@@ -679,14 +700,25 @@ sleep str = do
         _ -> return ()
     return ""
 
--- TODO
+-- TODO print error if exists
 -- XXX Admin or above required
 --      - Okay, maybe Op? Or just User...
 -- XXX this is `let'
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
-store str = return ""
+store str = do
+    let f = eval . (func <>)
+    mapConfig $ \c ->
+        let funcs = stConfFuncs c
+            funcs' = if M.member name funcs
+                     then funcs
+                     else M.insert name f funcs
+        in c { stConfFuncs = funcs' }
+    return ""
+  where
+    (name, func) = bisect (== ' ') str
 
+-- FIXME bloated
 -- | Store a message for a user that is printed when they talk next.
 tell :: Func
 tell str = do
@@ -736,7 +768,7 @@ topic str = mwhenStat (>= OpStat) $ do
             write $ "TOPIC " <> stChanName c <> " :" <> t
             write $ "TOPIC " <> stChanName c
         return t
-    either (const $ return "") id e
+    either (const $ return "") (>> return "") e
   where
     modder
         | T.null $ T.strip str = id

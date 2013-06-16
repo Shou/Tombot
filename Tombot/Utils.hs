@@ -36,7 +36,8 @@ import Network.HTTP.Conduit
 import Network.HTTP.Conduit.Browser
 import Network.HTTP.Types.Status
 
-import System.IO (Handle)
+import System.Directory (copyFile, removeFile)
+import System.IO (hClose, openTempFile, Handle)
 import System.Timeout (timeout)
 
 import Text.XML.Light
@@ -207,8 +208,8 @@ mwhenStat p m = do
 
 -- {{{ Exception utils
 
-try :: IO a -> IO (Either SomeException a)
-try = E.try
+try :: MonadIO m => IO a -> m (Either SomeException a)
+try = liftIO . E.try
 
 -- }}}
 
@@ -255,7 +256,7 @@ modLocalStored path f = do
 
 writeConf :: (MonadIO m, Show a) => FilePath -> a -> m (Either Text ())
 writeConf path a = liftIO $ do
-    ms <- fmap louder . try $ writeFile path $ show a
+    ms <- fmap louder . try $ writeFileSafe path $ T.pack $ show a
     return $! ms
   where
     louder :: Either SomeException a -> Either Text a
@@ -300,8 +301,7 @@ httpGetResponse' url = liftIO $ withManager $ \man -> do
 
 httpGetResponse :: MonadIO m => String -> m (String, [(String, String)], String, String)
 httpGetResponse url = do
-    let tryGet :: MonadIO m => m (Either (Maybe SomeException) (String, [(String, String)], String, String))
-        tryGet = liftIO $ do
+    let tryGet = liftIO $ do
             mr <- timeout (10 ^ 7) (try $ httpGetResponse' url)
             return $ maybe (Left Nothing) (either (Left . Just) Right) mr
     e <- tryGet
@@ -327,6 +327,25 @@ httpGetString url = liftIO $ withManager $ \man -> do
 
 -- }}}
 
+-- {{{ IO utils
+
+-- TODO test these functions
+
+appendFileSafe :: MonadIO m => FilePath -> Text -> m ()
+appendFileSafe p t = liftIO $ do
+    o <- T.readFile p
+    writeFileSafe p $ o <> t
+
+writeFileSafe :: MonadIO m => FilePath -> Text -> m ()
+writeFileSafe p t = liftIO $ do
+    (tp, th) <- openTempFile "/tmp" "append"
+    T.hPutStr th t
+    hClose th
+    copyFile tp p
+    removeFile tp
+
+-- }}}
+
 -- {{{ Mind utils
 
 -- XXX Do we make functions that use warn and verb, or do we use a verbosity
@@ -345,16 +364,15 @@ verb x = liftIO $ putStrLn $ "\x1b[1;33mVerbose " <> show x <> "\x1b[0m"
 erro :: (MonadIO m, Show a) => a -> m ()
 erro x = liftIO $ putStrLn $ "\x1b[0;31mError " <> show x <> "\x1b[0m"
 
--- TODO reconnect on no handle
 -- | Put a message to the current `Server'\'s `Handle'.
 write :: Text -> Mind ()
 write t = do
     s <- sees currServ
     let h = stServHandle s
-    ex <- liftIO $ E.try $ do
+    ex <- liftIO $ try $ do
         T.hPutStrLn h t
         T.putStrLn $ "\x1b[0;32m" <> t <> "\x1b[0m"
-    either (\e -> warn (e :: SomeException)) return ex
+    either warn return ex
 
 -- | Put a private message using `write'
 putPrivmsg :: Text -> Text -> Mind ()
