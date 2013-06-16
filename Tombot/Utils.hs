@@ -190,7 +190,7 @@ toStServ h (Server host port chans nicks name nsid) =
                 , stServHandle = h
                 , stServStat = Connected
                 , stServUsers = M.empty
-                , stServTKills = []
+                , stServThreads = mempty
                 }
 
 -- | When predicate `p' is True, run `m', otherwise return `mempty'.

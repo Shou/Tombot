@@ -169,7 +169,7 @@ fullCmd fs = do
               else args
     return $ Func c m o
   where
-    lefts = ["eval", "event", "help"]
+    lefts = ["eval", "event", "help", "let"]
 
 -- XXX will be Mind Text later on
 -- TODO clean up and split this function

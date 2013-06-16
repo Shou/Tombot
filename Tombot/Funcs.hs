@@ -109,17 +109,20 @@ anime' str = do
     let (matches, filters) = wordbreaks ((== '-') . T.head) string
         burl = "http://www.nyaa.eu/?page=search&cats=1_37&filter=2&term="
         search = T.unwords matches
-        filters' = map T.unpack filters
+        filters' = map (tailSafe . T.unpack) filters
     -- TODO urlEncode'
     html <- liftIO $ httpGetString (T.unpack $ burl <> search)
     let elem' = fromMaybeElement $ parseXMLDoc html
         qname = QName "td" Nothing Nothing
-        attrs = [Attr (QName "class" Nothing Nothing) "tlistname"]
-        elems = findElementsAttrs qname attrs elem'
-        -- TODO strip . elemsText
-        animes = map (elemsText) elems
+        sresults = findElementsAttrs qname [className "tlistname"] elem'
+        presults = findElementsAttrs qname [className "viewtorrentname"] elem'
+        sanimes = map (elemsText) sresults
+        panimes = map (elemsText) presults
+        animes = maybe sanimes (: sanimes) $ listToMaybe panimes
         animes' = filter (\x -> not $ any (`isInfixOf` x) filters') animes
     return $ take n animes'
+  where
+    className = Attr (QName "class" Nothing Nothing)
 
 -- | Anime releases function.
 anime :: Text -> Mind Text
@@ -139,7 +142,7 @@ airing str = do
         isSearch = not $ T.null string
         (matches, filters) = wordbreaks ((== '-') . T.head) string
         search = T.unpack $ T.unwords matches
-        filters' = map T.unpack filters
+        filters' = map (tailSafe . T.unpack) filters
     content <- httpGetString url
     let elem = fromMaybeElement $ parseXMLDoc content
         qTable = QName "table" Nothing Nothing
@@ -199,11 +202,6 @@ britify str = do
     let bs = maybe [] id ml
     return $ wordReplace str bs
 
--- XXX what purpose does this function serve
-colorize :: Func
-colorize str = do
-    return ""
-
 -- TODO
 -- | Replace rude/lascivious words with cute ones.
 cutify :: Func
@@ -213,6 +211,7 @@ cutify str = do
     let bs = maybe [] id ml
     return $ wordReplace str bs
 
+-- | DuckDuckGo !bang search.
 ddg :: Func
 ddg str = do
     let url = T.unpack $ "https://api.duckduckgo.com/?format=json&q=!" <> str
@@ -221,8 +220,8 @@ ddg str = do
 
 -- XXX should this be able to delete values from ALL files?
 --      - We'd have to make `del' functions for all functions otherwise.
--- TODO
--- | Delete something stored with `store'.
+-- TODO delete functions added with `store'
+-- | Delete something.
 del :: Func
 del str = return ""
 
@@ -256,30 +255,38 @@ eval str = do
             maybe (return "") id me
     either (\x -> warn x >> return "") id e
 
--- TODO kill threads properly
+-- TODO local to channel, not server
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = mwhenStat (>= OpStat) $ do
     edest <- sees $ currDest
     funcs <- fmap stConfFuncs readConfig
-    let e = flip fmap edest $ \chan -> void . forkMi $ whileAlive $ do
+    let e = flip fmap edest $ \chan -> do
+        kill name
+        tid <- forkMi $ whileAlive $ do
             let parser = botparser (stChanPrefix chan) (M.keys funcs)
                 mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
                 mt = flip fmap mkl $ compile funcs
             maybe (void $ kill name) (>>= putPrivmsg (stChanName chan)) mt
+        sets $ \c -> c {
+            currServ = (currServ c) {
+                stServThreads = let tds = stServThreads $ currServ c
+                                in M.insert name tid tds
+                                    }
+                       }
     either warn id e
     return ""
   where
     (name, t) = bisect (== ' ') str
     whileAlive m = do
-        evs <- sees $ stServTKills . currServ
-        if name `elem` evs
+        evs <- sees $ stServThreads . currServ
+        if M.member name evs
         then do
-            let evs' = filter (/= name) evs
-            sets $ \c -> c { currServ = (currServ c) { stServTKills = evs' } }
-        else do
             m
             whileAlive m
+        else do
+            let evs' = M.delete name evs
+            sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
 
 -- | Rainbow text!
 gay :: Func
@@ -317,10 +324,13 @@ kickban str = mapM_ ($ str) [kick, ban] >> return ""
 -- | Kill an event
 kill :: Func
 kill str = mwhenStat (>= OpStat) $ do
-    evs <- sees $ stServTKills . currServ
-    let evs' = if str `elem` evs then evs else str : evs
-    sets $ \c -> c { currServ = (currServ c) { stServTKills = evs' } }
-    return ""
+    evs <- sees $ stServThreads . currServ
+    let mev = M.lookup  str evs
+    flip (maybe $ return "") mev $ \ev -> do
+        liftIO $ killThread ev
+        let evs' = M.delete str evs
+        sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
+        return $ "Killed event `" <> str <> "'"
 
 -- | Count characters.
 count :: Func
@@ -384,6 +394,7 @@ history str = do
         mn = readMay $ T.unpack tn :: Maybe Int
         n = maybe 1 id mn
         string = maybe str (const str') mn
+        filters' = map (T.pack . tailSafe . T.unpack) filters
     host <- stServHost <$> sees currServ
     edest <- sees currDest
     path <- fmap stConfLogPath readConfig
@@ -394,8 +405,8 @@ history str = do
             t <- ts
             guard $ if null matches then True
                     else all (`T.isInfixOf` t) matches
-            guard $ if null filters then True
-                    else not $ any (`T.isInfixOf` t) filters
+            guard $ if null filters' then True
+                    else not $ any (`T.isInfixOf` t) filters'
             return t
         mt = ts' `atMay` n
     return $ maybe "" id mt
@@ -701,8 +712,7 @@ sleep str = do
     return ""
 
 -- TODO print error if exists
--- XXX Admin or above required
---      - Okay, maybe Op? Or just User...
+-- TODO be able to delete *ONLY* user defined ones such as through this
 -- XXX this is `let'
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
@@ -749,13 +759,12 @@ title :: Func
 title str = do
     (con, hed, _, _) <- httpGetResponse (T.unpack str)
     let respType = maybe "" id $ lookup "Content-Type" hed
-    liftIO $ print respType
     mwhen ("text/html" `isInfixOf` respType) $ do
         let xml = fromMaybeElement $ parseXMLDoc con
             qTitle = QName "title" Nothing Nothing
             elem = fromMaybeElement $ findElement qTitle xml
             text = elemsText elem
-        return $ T.pack text
+        return $ T.strip $ T.pack text
 
 -- TODO
 -- | Channel topic changing function.

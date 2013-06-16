@@ -143,7 +143,7 @@ data StServer = StServer { stServHost :: String
                          , stServHandle :: Handle
                          , stServStat :: ServStatus
                          , stServUsers :: Map Text User
-                         , stServTKills :: [Text]
+                         , stServThreads :: Map Text ThreadId
                          } deriving (Show)
 
 -- XXX should we split currConfigTMVar up?

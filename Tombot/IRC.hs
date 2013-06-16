@@ -391,11 +391,13 @@ joinInv (Invite nick name host dest chan) = do
 
 -- |
 adaptNum :: IRC -> Mind ()
-adaptNum (Numeric n ma t) = flip (maybe $ return ()) ma $ \a -> do
+adaptNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     mchan <- M.lookup a <$> sees (stServChans . currServ)
     let user = Left $ User "" "" "" UserStat mempty
         dest = maybe user Right mchan
     sets $ \c -> c { currDest = dest }
+  where
+    noArgs = "No `numArgs' in Numeric " <> n
 
 -- |
 welcomeNum :: IRC -> Mind ()
@@ -410,17 +412,17 @@ welcomeNum _ = do
 
 -- |
 whoisNum :: IRC -> Mind ()
-whoisNum (Numeric n ma t) = do
-    let ma' = flip fmap ma $ \a -> do
-        let xs = T.words a
-            nick = atDef "" xs 0
-            name = atDef "" xs 1
-            host = atDef "" xs 2
-        e <- modUser nick $ \u -> u { userName = name
-                                    , userHost = host
-                                    }
-        either warn return e
-    maybe (return ()) id ma'
+whoisNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
+    let xs = T.words a
+        nick = atDef "" xs 0
+        name = atDef "" xs 1
+        host = atDef "" xs 2
+    e <- modUser nick $ \u -> u { userName = name
+                                , userHost = host
+                                }
+    either warn return e
+  where
+    noArgs = "No `numArgs' in Numeric " <> n
 
 -- |
 topicNum :: IRC -> Mind ()
@@ -457,6 +459,12 @@ modeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     let (chan, mode) = dropWhile (== '+') . T.unpack <$> bisect (== ' ') a
     e <- modChan chan $ \c -> c { stChanMode = mode }
     either warn return e
+  where
+    noArgs = "No `numArgs' in Numeric " <> n
+
+privilegeNum :: IRC -> Mind ()
+privilegeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
+    write $ "PRIVMSG " <> a <> " :" <> "C-check my privileges, p-please!"
   where
     noArgs = "No `numArgs' in Numeric " <> n
 
