@@ -1,9 +1,9 @@
 
 Name:               Tombot
 Version:            0.2.0
-Synopsis:           The cute IRC bot that does useless things.
+Synopsis:           The Haskell IRC bot that composes functions.
 Author:             Shou
-Maintainer:         shou@gnusokyo
+Maintainer:         x@shou.io
 Copyright:          Shou
 License:            GPL-2
 License-File:       LICENSE

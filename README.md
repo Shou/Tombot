@@ -14,68 +14,57 @@ A line using her functions need to be prefixed with `.` or `!` by default.
 
 * `>`
 Prints a message to the channel, or user if it is a private message.<br>
-It takes a string as an argument.<br>
-Example: `.> I-it's not like I'm sending this because I want to or a-anything, idiot!`
+Syntax: `> <string>`
+Example: `:> I-it's not like I'm sending this because I want to or a-anything, idiot!`
 
 * `<`
 Prints a message to the user.<br>
-It acts the same way as `.>`.<br>
-Example: `.< Psst, Tombot! Please print some kawaii messages.`
+Syntax: `< <string>`
+Example: `:< Psst, Tombot! Please print some kawaii messages.`
 
 * `^`
 Searches for a message in the bot's chatlog.<br>
-It takes two optional arguments. The index of the list of matches, and a search string. If no search string is given, it matches against everything.<br>
-Example: `.^ banana -apple`
+Syntax: `^ [index] [<string>]`
+Example: `:^ 3 banana -apple`
 
 * `us`
 Userlist printing function.<br>
-Takes no arguments.<br>
-Example: `.us`
+Syntax: `:us`
 
 * `sed`
 A regex replace function.<br>
-It takes two arguments, the regex matching and replacing string and a string.<br>
-Example: `.> I love bananas! -> sed s/banana/apple/`
+Syntax: `sed s/<match>/<replacement>/[i] <string>`
+Example: `:> I love bananas! -> sed s/banana/apple/`
 
 * `ai`
 Prints currently airing anime.<br>
-It takes one argument; the anime to search for.<br>
-Example: `.ai`
+Syntax: `ai [<string>]`
+Example: `:ai`
 
 * `an`
 Prints recent anime releases.<br>
-It takes one argument; the anime to search for.<br>
-Example: `.an yuruyuri -HorribleSubs`
+Syntax: `an [<string>]`
+Example: `:an yuruyuri -HorribleSubs`
 
 * `ma`
 Prints recent manga releases.<br>
-It takes one argument; the manga to search for.<br>
-Example: `.ma banana no nana`
+Syntax: `ma [amount] [<string>]`
+Example: `:ma 5 banana no nana`
 
 * `ra`
 Prints a random number or string.<br>
-Takes one integer as an argument, or several strings separated by `|` (pipe).<br>
-Example: `.ra Suwako|Momiji|Youmu`
-
-* `lewd`
-Prints a random string from the file as defined in `Config.hs`.<br>
-Takes arguments!<br>
-Example: `.lewd ++ .lewd ++ .lewd ++ .lewd`
-
-* `sage`
-Sages a person in the channel.<br>
-Takes one argument, a nick.<br>
-Example: `.sage Shou`
+Syntax: `ra <integer>, <string> | <string> ...`
+Example: `:ra Suwako|Momiji|Youmu`
 
 * `wiki`
 Prints the top paragraph of a Wikipedia article.<br>
-Takes one argument, the article title.<br>
-Example: `.wiki haskell programming language`
+Syntax: `wiki <string>`
+Example: `:wiki haskell programming language`
 
 * `isup`
 Prints the status of a website.<br>
-Takes one argument, an URL.<br>
-Example: `.isup haskell.org`
+Syntax: `isup <url>`
+Example: `:isup haskell.org`
 
 ## Operators
 * `->`

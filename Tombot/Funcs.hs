@@ -1,4 +1,8 @@
 
+-- This file is part of Tombot, licensed under the GNU GPL 2 license.
+-- See the file "LICENSE" for more information.
+-- Copyright Shou, 2013
+
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 
@@ -188,6 +192,7 @@ ban str = do
     nicks = T.words str
     bs = T.replicate (length nicks) "b"
 
+-- | Respond to `bots'
 bots :: Func
 bots _ = do
     gr <- greet ""
@@ -226,6 +231,7 @@ del :: Func
 del str = return ""
 
 -- TODO
+-- | Word definition lookup function.
 dict :: Func
 dict str = do
     return ""
@@ -303,7 +309,6 @@ gay str = return $ colorize 0 mempty str <> "\ETX"
                       in colorize n' acc' t'
     colors = ["\ETX,04", "\ETX,07", "\ETX,08", "\ETX,03", "\ETX,02", "\ETX,06"]
 
--- TODO several users
 -- | Kick a user.
 kick :: Func
 kick str = do
@@ -315,12 +320,10 @@ kick str = do
     nicks = T.intercalate "," $ T.words nicks'
     fullkick c = "KICK " <> stChanName c <> " " <> nicks <> " " <> txt
 
--- TODO several users
 -- | Kick and ban a user.
 kickban :: Func
 kickban str = mapM_ ($ str) [kick, ban] >> return ""
 
--- TODO return "Killed event `name'"
 -- | Kill an event
 kill :: Func
 kill str = mwhenStat (>= AdminStat) $ do
@@ -373,7 +376,6 @@ greet str = do
     n <- liftIO $ randomRIO (0, len - 1)
     return $ maybe "" (flip (atDef "") n) mgreets
 
--- XXX should be left associative like `eval'
 -- TODO add help for the operators, help syntax and other relevant things
 -- | Help for usage of the bot.
 help :: Func
@@ -533,7 +535,7 @@ random str
         n <- liftIO $ randomRIO (0, len - 1)
         if len > 0
         then return $ choices !! n
-        else return mempty
+   b     else return mempty
   where
     isDigits = T.all (`elem` ['0' .. '9'])
     maybeRead = fmap fst . listToMaybe . reads
@@ -563,24 +565,22 @@ reload _ = mwhenStat (>= AdminStat) $ do
         H.setTopLevelModules ms
         H.interpret x as
 
--- TODO
 -- | Remind a user on join.
 remind :: Func
 remind str = do
     verb "wat"
     cnick <- sees $ userNick . currUser
     verb $ "Remind " <> cnick
-    modLocalStored "remind" $ \nickmap -> if M.member nick nickmap
-                                          then if nick == cnick
-                                               then M.insert nick msg nickmap
-                                               else nickmap
-                                          else M.insert nick msg nickmap
+    modLocalStored "remind" $ \nickmap ->
+        if M.member nick nickmap
+        then if nick == cnick
+             then M.insert nick msg nickmap
+             else nickmap
+        else M.insert nick msg nickmap
     return ""
   where
     (nick, msg) = bisect (== ' ') str
 
--- TODO
--- XXX make this right associative
 -- | Respond to a regex match by running a function with any match(es) as the
 --   argument.
 --
@@ -650,6 +650,7 @@ sed str = mwhen (T.length str > 1) $ do
         pure (mat <> [mc], rep <> [rc], ins, str)
     escape x = A.try $ A.notChar '\\' >>= \c -> A.char x >> return c
 
+-- XXX we should probably deprecate this in favour of standalone functions
 -- TODO
 -- | `set' lets the user change settings, such as the `UserStat' of a user.
 setv :: Func
@@ -727,7 +728,6 @@ sleep str = do
 
 -- TODO print error if exists
 -- TODO be able to delete *ONLY* user defined ones such as through this
--- XXX this is `let'
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
 store str = mwhenStat (>= OpStat) $ do

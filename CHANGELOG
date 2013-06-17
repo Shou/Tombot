@@ -38,9 +38,11 @@ Later
 0.2.0 -- Major update
 - Deprecated KawaiiBot in favour of Tombot.
 - Merged Core and Client together.
-- Added runtime module reloading through `hint'.
 - Rewrote KawaiiLang parser.
 - Rewrote Config and related data.
 - Added new IRC bot functions and operators.
 - Added permission system.
+
+Soon
+- Added runtime module reloading through `hint'.
 

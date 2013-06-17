@@ -1,4 +1,8 @@
 
+-- This file is part of Tombot, licensed under the GNU GPL 2 license.
+-- See the file "LICENSE" for more information.
+-- Copyright Shou, 2013
+
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE StandaloneDeriving #-}
 -- {-# LANGUAGE TypeSynonymInstances #-}
