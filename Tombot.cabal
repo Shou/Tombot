@@ -19,6 +19,7 @@ Executable tombot
         base,
         case-insensitive,
         containers,
+        directory,
         either,
         errors,
         hint,

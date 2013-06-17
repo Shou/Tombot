@@ -258,7 +258,7 @@ eval str = do
 -- TODO local to channel, not server
 -- | Create an event. Useful with `sleep'.
 event :: Func
-event str = mwhenStat (>= OpStat) $ do
+event str = mwhenStat (>= AdminStat) $ do
     edest <- sees $ currDest
     funcs <- fmap stConfFuncs readConfig
     let e = flip fmap edest $ \chan -> do
@@ -323,7 +323,7 @@ kickban str = mapM_ ($ str) [kick, ban] >> return ""
 -- TODO return "Killed event `name'"
 -- | Kill an event
 kill :: Func
-kill str = mwhenStat (>= OpStat) $ do
+kill str = mwhenStat (>= AdminStat) $ do
     evs <- sees $ stServThreads . currServ
     let mev = M.lookup  str evs
     flip (maybe $ return "") mev $ \ev -> do
@@ -427,6 +427,12 @@ isup str = do
     (_, _, status, _) <- httpGetResponse (T.unpack url)
     return $ T.pack status
 
+-- TODO add default Channel data
+-- | Join a channel.
+join :: Func
+join str = do
+    write "JOIN " <> str
+
 -- TODO filter
 -- | Recent manga releases.
 manga :: Func
@@ -496,6 +502,14 @@ modeplus str = mode $ "+" <> str
 -- | Set the channel mode, prepending a -.
 modeminus :: Func
 modeminus str = mode $ "-" <> str
+
+-- | Part from a channel.
+part :: Func
+part str
+    | T.null $ T.strip str = mwhenStat (>= OpStat) $ do
+        edest <- sees currDest
+        either (const $ pure "") (write "PART " <>) edest
+    | otherwise = mwhenStat (>= AdminStat) $ write "PART " <> str
 
 -- | Send a private message to the user.
 priv :: Func
@@ -716,7 +730,9 @@ sleep str = do
 -- XXX this is `let'
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
-store str = do
+store str = mwhenStat (>= OpStat) $ do
+    dir <- fmap stConfDir readConfig
+    funcs <- M.keys . stConfFuncs <$> readConfig
     let f = eval . (func <>)
     mapConfig $ \c ->
         let funcs = stConfFuncs c
@@ -724,6 +740,10 @@ store str = do
                      then funcs
                      else M.insert name f funcs
         in c { stConfFuncs = funcs' }
+    modLocalStored "letfuncs" $ \letfuncs ->
+        if M.member name funcs
+        then letfuncs
+        else M.insert name func letfuncs
     return ""
   where
     (name, func) = bisect (== ' ') str
@@ -769,15 +789,19 @@ title str = do
 -- TODO
 -- | Channel topic changing function.
 topic :: Func
-topic str = mwhenStat (>= OpStat) $ do
-    edest <- sees $ currDest
-    let e = flip fmap edest $ \c -> do
-        let t = modder $ stChanTopic c
-        unless (t == stChanTopic c) $ do
-            write $ "TOPIC " <> stChanName c <> " :" <> t
-            write $ "TOPIC " <> stChanName c
-        return t
-    either (const $ return "") (>> return "") e
+topic str
+    | T.null $ T.strip str = do
+        e <- sees currDest
+        flip (either $ const $ pure "") e $ \c -> return $ stChanTopic c
+    | otherwise = mwhenStat (>= OpStat) $ do
+        edest <- sees currDest
+        let e = flip fmap edest $ \c -> do
+            let t = modder $ stChanTopic c
+            unless (t == stChanTopic c) $ do
+                write $ "TOPIC " <> stChanName c <> " :" <> t
+                write $ "TOPIC " <> stChanName c
+            return t
+        either (const $ return "") (>> return "") e
   where
     modder
         | T.null $ T.strip str = id

@@ -86,13 +86,18 @@ onKick _ _ = right ()
 -- |
 joinUserlist :: IRC -> Mind ()
 joinUserlist (Join nick name host chan) = do
-    modUserlist stChanAdd
-  where
-    stChanAdd users =
-        let mu = mapChans (M.insert chan "") <$> M.lookup nick users
-            cs = M.fromList [(chan, "")]
-            us = fromJust $ mu <|> Just (User nick name host UserStat cs)
-        in M.insert nick us users
+    server <- sees currServ
+    dir <- stConfDir <$> readConfig
+    let servhost = stServHost server
+    musers <- join . fmap (M.lookup servhost) <$> readConf (dir <> "UserStats")
+    let users = stServUsers server
+        mu = mapChans (M.insert chan "") <$> M.lookup nick users
+        chans = M.fromList [(chan, "")]
+        susers = maybe mempty id musers
+        stat = maybe UserStat id $ M.lookup nick susers
+        mu' = flip fmap mu $ \u -> u { userStat = stat }
+        user = fromJust $ mu' <|> Just (User nick name host stat chans)
+    modUserlist $ M.insert nick user
 
 -- TODO limit to one message?
 -- | Remind the user with the user's message.
@@ -204,13 +209,17 @@ changeMode (Mode nick name host chan chars mtext) =
 
 nickUserlist :: IRC -> Mind ()
 nickUserlist (Nick nick name host text) = do
-    modUserlist nickMod
-  where
-    nickMod users =
-        let mu = (\u -> u { userNick = text }) <$> M.lookup nick users
-            cs = M.empty
-            us = fromJust $ mu <|> Just (User text name host UserStat cs)
-        in M.insert text us $ M.delete nick users
+    server <- sees currServ
+    dir <- stConfDir <$> readConfig
+    let servhost = stServHost server
+    musers <- join . fmap (M.lookup servhost) <$> readConf (dir <> "UserStats")
+    let users = stServUsers server
+        mu = M.lookup nick users
+        susers = maybe mempty id musers
+        stat = maybe UserStat id $ M.lookup text susers
+        mu' = flip fmap mu $ \u -> u { userNick = text, userStat = stat }
+        user = fromJust $ mu' <|> Just (User text name host stat mempty)
+    modUserlist $ M.insert text user . M.delete nick
 
 -- }}}
 
@@ -338,7 +347,8 @@ onMatch irc@(Privmsg nick name host dest text) = do
                 let indexes = [ '\\' : show x | x <- [0 ..]]
                     replacer = zipWith replace indexes ins
                     resp' = foldr ($) resp replacer
-                runLang $ irc { privText = T.pack resp' }
+                    resp'' = T.unpack $ T.replace "%nick%" nick (T.pack resp')
+                runLang $ irc { privText = T.pack resp'' }
             maybe (return ()) id m
         either warn id e
   where
@@ -436,8 +446,10 @@ topicNum (Numeric n ma t) =
 userlistNum :: IRC -> Mind ()
 userlistNum (Numeric n ma t) = do
     server <- sees currServ
+    dir <- stConfDir <$> readConfig
+    let host = stServHost server
     flip (maybe $ noNumeric "353") ma $ \chan -> do
-        musers <- readLocalStored "UserStats"
+        musers <- join . fmap (M.lookup host) <$> readConf (dir <> "UserStats")
         forM_ (T.words t) $ \modenick -> do
             let (ircmode, nick) = T.break (`notElem` "~&@%+") modenick
                 mode = toMode (T.unpack ircmode)
@@ -451,7 +463,7 @@ userlistNum (Numeric n ma t) = do
                 mu' = flip fmap mu $ \u -> u { userStat = stat }
                 user = fromJust $ mu' <|> Just (User nick "" "" stat chans)
             modUserlist $ M.insert nick user
-            write $ "WHOIS " <> nick
+            --write $ "WHOIS " <> nick
 
 -- |
 modeNum :: IRC -> Mind ()
