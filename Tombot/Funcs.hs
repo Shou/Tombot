@@ -74,6 +74,7 @@ funcs = M.fromList [ ("!", ddg)
                    , ("kill", kill)
                    , ("len", count)
                    , ("let", store)
+                   , ("part", part)
                    , ("ra", random)
                    , ("re", remind)
                    , ("tell", tell)
@@ -92,6 +93,7 @@ funcs = M.fromList [ ("!", ddg)
                    , ("show", reveal)
                    , ("us", userlist)
                    , ("cutify", cutify)
+                   , ("join", chanjoin)
                    , ("reload", reload)
                    , ("urb", urbandict)
                    , ("britify", britify)
@@ -431,9 +433,10 @@ isup str = do
 
 -- TODO add default Channel data
 -- | Join a channel.
-join :: Func
-join str = do
-    write "JOIN " <> str
+chanjoin :: Func
+chanjoin str = do
+    write $ "JOIN " <> str
+    return ""
 
 -- TODO filter
 -- | Recent manga releases.
@@ -510,8 +513,10 @@ part :: Func
 part str
     | T.null $ T.strip str = mwhenStat (>= OpStat) $ do
         edest <- sees currDest
-        either (const $ pure "") (write "PART " <>) edest
-    | otherwise = mwhenStat (>= AdminStat) $ write "PART " <> str
+        either (const $ pure "") (parter . stChanName) edest
+    | otherwise = mwhenStat (>= AdminStat) $ parter str
+  where
+    parter chan = write ("PART " <> chan) >> return ""
 
 -- | Send a private message to the user.
 priv :: Func
@@ -535,7 +540,7 @@ random str
         n <- liftIO $ randomRIO (0, len - 1)
         if len > 0
         then return $ choices !! n
-   b     else return mempty
+        else return mempty
   where
     isDigits = T.all (`elem` ['0' .. '9'])
     maybeRead = fmap fst . listToMaybe . reads
@@ -732,7 +737,7 @@ sleep str = do
 store :: Func
 store str = mwhenStat (>= OpStat) $ do
     dir <- fmap stConfDir readConfig
-    funcs <- M.keys . stConfFuncs <$> readConfig
+    funcs <- stConfFuncs <$> readConfig
     let f = eval . (func <>)
     mapConfig $ \c ->
         let funcs = stConfFuncs c
