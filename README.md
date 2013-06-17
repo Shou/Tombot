@@ -12,6 +12,9 @@ To install, run `cabal install` in the root of her directory.
 
 A line using her functions need to be prefixed with `.` or `:` by default.
 
+Along with these functions a user may define new functions, use `help` to see
+what those functions are.
+
 * `>`
 Prints a message to the channel, or user if it is a private message.<br>
 Syntax: `> <string>`
@@ -29,7 +32,7 @@ Example: `:^ 3 banana -apple`
 
 * `us`
 Userlist printing function.<br>
-Syntax: `:us`
+Syntax: `us`
 
 * `sed`
 A regex replace function.<br>
