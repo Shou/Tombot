@@ -47,6 +47,29 @@ instance Functor Allowed where
 instance Show (TMVar a) where
     show x = "TMVar _"
 
+instance Show StConfig where
+    show x = let verb = show $ stConfVerb x
+                 dir = show $ stConfDir x
+                 log = show $ stConfLog x
+                 logpath = show $ stConfLogPath x
+                 path = show $ stConfPath x
+                 servs = show $ stConfServs x
+             in concat [ "StConfig {stConfVerb = "
+                       , verb
+                       , ", stConfDir = "
+                       , dir
+                       , ", stConfLog = "
+                       , log
+                       , ", stConfLogPath = "
+                       , logpath
+                       , ", stConfPath = "
+                       , path
+                       , ", stConfFuncs = _"
+                       , ", stConfServs = "
+                       , servs
+                       , "}"
+                       ]
+
 data UserStatus = Offline
                 | Banned
                 | Online

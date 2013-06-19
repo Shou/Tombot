@@ -227,6 +227,9 @@ mwhenUMode p m = do
     dest <- either userNick stChanName <$> sees currDest
     chans <- sees $ userChans . currUser
     let bool = maybe False p $ M.lookup dest chans
+    verb dest
+    verb chans
+    verb bool
     mwhen bool m
 
 -- }}}
@@ -375,8 +378,8 @@ writeFileSafe p t = liftIO $ do
 
 ctcp t = "\SOH" <> t <> "\SOH"
 
-isChan x | T.length x > 0 = T.head x == '#'
-         | otherwise = False
+isChan :: Text -> Bool
+isChan = T.isPrefixOf "#"
 
 toMode t = map modeChar t
   where

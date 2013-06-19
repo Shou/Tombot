@@ -12,8 +12,8 @@ To install, run `cabal install` in the root of her directory.
 
 A line using her functions need to be prefixed with `.` or `:` by default.
 
-Along with these functions a user may define new functions, use `help` to see
-what those functions are.
+Along with these functions a user may define new functions using `let`, and you
+can use `help` to see what those functions are.
 
 * `!`
 Search DuckDuckGo using a !bang tag.<br>
@@ -56,7 +56,7 @@ Syntax: `v <nick> ...`
 Example: `:v Chen Rin`
 
 * `an`
-Search for anime releases and optionally choose how many results to print.
+Search for anime releases and optionally choose how many results to print.<br>
 Syntax: `an [<number>] [<string>]`
 Example: `:an 10 potato`
 
@@ -76,7 +76,9 @@ Syntax: `ma [<number>] [<string>]`
 Example: `:ma 5 banana no nana`
 
 * `on`
-Run some function(s) on match.
+Run some function(s) on match.<br>
+Syntax: `on <regex> <kawaiilang>`
+Example: `:on /what should i do/i :nick ++ ra Go to bed|Do your work|Work out`
 
 * `ra`
 Prints a random number or string.<br>
@@ -135,15 +137,15 @@ Execute the first function, disregard the output and continue.<br>
 Example: `:tell Fogun Did you watch Gargantia yet? >> tell lunar Hi!`
 
 * `<>`
-Or; return whatever function's result isn't empty. \[Lazy\]<br>
+Or; return whatever function's result isn't empty. `Lazy`<br>
 Example: `:ra You're safe for now| <> b John`
 
 * `><`
-And; return the right function's output only if both functions return something. \[Lazy\]<br>
+And; return the right function's output only if both functions return something. `Lazy`<br>
 Example: `:ra You're dead, kid!| >< b John`
 
 * `+>`
-And append; return both functions' outputs appended only if both return something. \[Lazy\]<br>
+And append; return both functions' outputs appended only if both return something. `Lazy`<br>
 Example: `:`
 
 ⑨

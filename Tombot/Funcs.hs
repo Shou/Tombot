@@ -69,11 +69,13 @@ funcs = M.fromList [ ("!", ddg)
                    , ("dict", dict)
                    , ("eval", eval)
                    , ("help", help)
+                   , ("host", host)
                    , ("http", http)
                    , ("isup", isup)
                    , ("kill", kill)
                    , ("len", count)
                    , ("let", store)
+                   , ("name", name)
                    , ("nick", nick)
                    , ("quit", quit)
                    , ("ra", random)
@@ -90,6 +92,7 @@ funcs = M.fromList [ ("!", ddg)
                    , ("cjoin", cjoin)
                    , ("event", event)
                    , ("greet", greet)
+                   , ("nicks", nicks)
                    , ("sleep", sleep)
                    , ("title", title)
                    , ("topic", topic)
@@ -217,6 +220,36 @@ britify str = do
     let bs = maybe [] id ml
     return $ wordReplace str bs
 
+-- | Set the channel's ChanAutoJoin value
+cajoin :: Func
+cajoin str = do
+    dest <- either userNick stChanName <$> sees currDest
+    if T.null $ T.strip str
+    then do
+        mchan <- M.lookup dest . stServChans . currServ <$> see
+        return $ maybe "" (T.pack . show . stChanAutoJoin) mchan
+    else mwhenUMode isMod $ do
+        modChan dest $ \c -> c { stChanAutoJoin = let v = stChanAutoJoin c
+                                                      mv = readMay $ T.unpack str
+                                                  in maybe v id mv
+                               }
+        return ""
+
+-- | Set the channel's ChanJoin value
+cjoin :: Func
+cjoin str = do
+    dest <- either userNick stChanName <$> sees currDest
+    if T.null $ T.strip str
+    then do
+        mchan <- M.lookup dest . stServChans . currServ <$> see
+        return $ maybe "" (T.pack . show . stChanJoin) mchan
+    else mwhenUMode isMod $ do
+        modChan dest $ \c -> c { stChanJoin = let v = stChanJoin c
+                                                  mv = readMay $ T.unpack str
+                                              in maybe v id mv
+                               }
+        return ""
+
 -- TODO
 -- | Replace rude/lascivious words with cute ones.
 cutify :: Func
@@ -269,9 +302,8 @@ eval str = do
                 mkl = A.maybeResult . flip A.feed "" $ A.parse parser str
                 me = flip fmap mkl $ compile funcs
             maybe (return "") id me
-    either (\x -> warn x >> return "") id e
+    either (mvoid . warn) id e
 
--- TODO local to channel, not server
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = mwhenStat (>= Admin) $ do
@@ -311,7 +343,7 @@ gay str = return $ colorize 0 mempty str' <> "\ETX"
     pad xs = xs
     str' = foldr (flip T.replace "") str $ do
         x <- [0 .. 15]
-        return . T.pack . pad $ show x
+        return . T.cons '\ETX' . T.pack . pad $ show x
     colorize n acc t
         | T.null t = acc
         | otherwise = let n' = succ n
@@ -380,9 +412,11 @@ count str = return $ T.pack . show $ T.length str
 
 -- | List the available Funcs.
 list :: Func
-list str = if T.null $ T.strip str
+list str = do
+    edest <- sees currDest
+    let dest = either userNick stChanName edest
+    if T.null $ T.strip str
     then do
-        edest <- sees $ currDest
         tmvar <- sees currConfigTMVar
         funcs <- fmap (stConfFuncs) . liftIO $ atomically $ readTMVar tmvar
         let ea = fmap stChanFuncs edest
@@ -399,7 +433,7 @@ list str = if T.null $ T.strip str
                     | "funcs" `notElem` xs -> const $ Blacklist xs
                     | otherwise -> const $ Blacklist $ filter (/= "set") xs
                 Nothing -> id
-        e <- modChanFuncs str $ insert
+        e <- modChanFuncs dest $ insert
         return $ either id (const "") e
   where
     allowedstr = let (x, y) = show . T.unpack <$> bisect (== ' ') str
@@ -465,6 +499,10 @@ history str = do
             return t
         mt = ts' `atMay` n
     return $ maybe "" id mt
+
+-- | The current user's hostname
+host :: Func
+host _ = sees $ userHost . currUser
 
 -- | Get a HTTP header from a request.
 http :: Func
@@ -559,6 +597,20 @@ modeplus str = mode $ "+" <> str
 modeminus :: Func
 modeminus str = mode $ "-" <> str
 
+-- | The current user's name
+name :: Func
+name _ = sees $ userName . currUser
+
+-- | The current user's nick
+nick :: Func
+nick _ = sees $ userNick . currUser
+
+-- | Set the bot's nicks
+nicks :: Func
+nicks str = if T.null $ T.strip str
+    then T.unwords . stServBotNicks . currServ <$> see
+    else mwhenStat (>= Admin) $ return ""
+
 -- | Part from a channel.
 partchan :: Func
 partchan str
@@ -568,6 +620,18 @@ partchan str
     | otherwise = mwhenStat (>= Admin) $ parter str
   where
     parter chan = mvoid $ write $ "PART " <> chan
+
+-- | Set the channel's prefix `Char's
+prefix :: Func
+prefix str = do
+    dest <- either userNick stChanName <$> sees currDest
+    if T.null $ T.strip str
+    then do
+        dest <- either userNick stChanName <$> sees currDest
+        mchan <- M.lookup dest . stServChans . currServ <$> see
+        return $ maybe "" (T.pack . stChanPrefix) mchan
+    else mwhenUMode isMod $ do
+        mvoid . modChan dest $ \c -> c { stChanPrefix = T.unpack str }
 
 -- | Send a private message to the user.
 priv :: Func
@@ -597,7 +661,7 @@ random str
 
 -- | Write directly to the IRC handle of the current server.
 raw :: Func
-raw str = mwhenStat (>= Admin) $ mvoid $ write str
+raw str = mwhenStat (== Root) $ mvoid $ write str
 
 -- TODO
 -- FIXME this explodes
@@ -665,18 +729,12 @@ reveal str = do
         ("Config", _) -> do
             t <- sees currConfigTMVar
             v <- liftIO . atomically $ readTMVar t
-            return . T.pack . show . stConfVerb $ v
-        (_, "") -> return "show <key> <argument>"
+            return . T.pack . show $ v
         ("User", nick) -> getUser nick >>= return . maybe "" (T.pack . show)
         ("Chan", chan) -> getChan chan >>= return . maybe "" (T.pack . show)
-        _ -> return $ "Not a key. Keys: " <> T.intercalate ", " keys
+        _ -> return ""
   where
-    key = T.strip . fst . bisect (== ' ') . fst . bisect (== '=')
-    arg = T.strip . snd . bisect (== ' ') . fst . bisect (== '=')
-    double = (key str, arg str)
-    keys = [ "User"
-           , "Chan"
-           ]
+    double = first T.strip . second T.strip $ bisect (== ' ') str
 
 -- TODO Char x should only be a specific range of chars. No alphanumeric or '\'
 -- | Regex replace function.
@@ -695,25 +753,16 @@ sed str = mwhen (T.length str > 1) $ do
     parser x = do
         A.char 's'
         A.char x
-        (mat, mc) <- manyTillKeep A.anyChar $ escape x
-        (rep, rc) <- manyTillKeep A.anyChar $ escape x
-        ins <- (== 'i') <$> A.try (A.char 'i' <|> pure 'z')
+        mat <- section x
+        rep <- section x <|> (A.char x >> return "")
+        ins <- (/= 'i') <$> A.try (A.char 'i' <|> pure 'z')
         A.space
         str <- T.unpack <$> A.takeText
-        pure (mat <> [mc], rep <> [rc], ins, str)
+        pure (mat, rep, ins, str)
+    section x = do
+        (str, c) <- manyTillKeep A.anyChar $ escape x
+        return $ str <> [c]
     escape x = A.try $ A.notChar '\\' >>= \c -> A.char x >> return c
-
--- | Set the Config verbosity
-verbosity :: Func
-verbosity str = do
-    if T.null $ T.strip str
-    then T.pack . show . stConfVerb <$> readConfig
-    else do
-        mapConfig $ \c -> c { stConfVerb = let v = stConfVerb c
-                                               mv = readMay $ T.unpack str
-                                           in maybe v id mv
-                            }
-        return ""
 
 -- | Set a User's Stat
 stat :: Func
@@ -732,55 +781,6 @@ stat str = do
   where
     (nick, value) = first T.strip . second T.strip $ bisect (== '=') str
 
--- XXX cjoin et al should only be used on the current channel
-
--- | Set the channel's ChanJoin value
-cjoin :: Func
-cjoin str = do
-    dest <- either userNick stChanName <$> sees currDest
-    if T.null $ T.strip str
-    then do
-        mchan <- M.lookup dest . stServChans . currServ <$> see
-        return $ maybe "" (T.pack . show . stChanJoin) mchan
-    else do
-        modChan dest $ \c -> c { stChanJoin = let v = stChanJoin c
-                                                  mv = readMay $ T.unpack str
-                                              in maybe v id mv
-                               }
-        return ""
-
--- | Set the channel's ChanAutoJoin value
-cajoin :: Func
-cajoin str = do
-    dest <- either userNick stChanName <$> sees currDest
-    if T.null $ T.strip str
-    then do
-        mchan <- M.lookup dest . stServChans . currServ <$> see
-        return $ maybe "" (T.pack . show . stChanAutoJoin) mchan
-    else do
-        modChan dest $ \c -> c { stChanAutoJoin = let v = stChanAutoJoin c
-                                                      mv = readMay $ T.unpack str
-                                                  in maybe v id mv
-                               }
-        return ""
-
--- | Set the channel's prefix `Char's
-prefix :: Func
-prefix str = do
-    dest <- either userNick stChanName <$> sees currDest
-    if T.null $ T.strip str
-    then do
-        dest <- either userNick stChanName <$> sees currDest
-        mchan <- M.lookup dest . stServChans . currServ <$> see
-        return $ maybe "" (T.pack . show . stChanPrefix) mchan
-    else mvoid . modChan dest $ \c -> c { stChanPrefix = T.unpack str }
-
--- | Set the bot's nicks
-nick :: Func
-nick str = if T.null $ T.strip str
-    then return ""
-    else return ""
-
 -- | Delay a function by n seconds where n is a floating point number.
 sleep :: Func
 sleep str = do
@@ -789,8 +789,8 @@ sleep str = do
         Just n -> liftIO $ threadDelay $ fromEnum $ 10^6*n
         _ -> return ()
 
--- TODO print error if exists
--- TODO be able to delete *ONLY* user defined ones such as through this
+-- TODO only Admins can overwrite old funcs, and they MUST exist in the
+--      "letfuncs" file.
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
 store str = mwhenUMode isMod $ do
@@ -808,7 +808,7 @@ store str = mwhenUMode isMod $ do
         then letfuncs
         else M.insert name func letfuncs
   where
-    (name, func) = bisect (== ' ') str
+    (name, func) = first T.toLower $ bisect (== ' ') str
 
 -- FIXME bloated
 -- | Store a message for a user that is printed when they talk next.
@@ -908,6 +908,18 @@ userlist _ = mwhenUMode isMod $ do
     chanNicks us c = let nicks = filter (M.member (stChanName c) . userChans) us
                          nicks' = filter ((/= Offline) . userStat) nicks
                      in T.unwords $ map userNick nicks'
+
+-- | Set the Config verbosity
+verbosity :: Func
+verbosity str = do
+    if T.null $ T.strip str
+    then T.pack . show . stConfVerb <$> readConfig
+    else mwhenStat (== Root) $ do
+        mapConfig $ \c -> c { stConfVerb = let v = stConfVerb c
+                                               mv = readMay $ T.unpack str
+                                           in maybe v id mv
+                            }
+        return ""
 
 -- | Give voice to users.
 voice :: Func

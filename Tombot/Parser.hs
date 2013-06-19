@@ -119,9 +119,9 @@ cmd cmds = A.choice (zipWith (flip ($)) scmds $ cycle [fcmd])
     -- sort by length so longer function names are prioritised
     scmds = sortBy (comparing $ (* (-1)) . T.length) cmds
     fcmd x = do
-        c <- A.string x
+        c <- A.asciiCI x
         if T.all isLetter c then A.skipSpace else A.try A.skipSpace
-        return c
+        return $ T.toLower c
 
 skipPrefix :: [Char] -> Parser ()
 skipPrefix cs = A.skip (`elem` cs)
@@ -173,8 +173,9 @@ fullCmd fs = do
               else args
     return $ Func c m o
   where
-    lefts = ["eval", "event", "help", "let"]
+    lefts = ["eval", "event", "help", "let", "on"]
 
+-- TODO figure out how ++ keeps spaces but not <- and ->
 -- XXX will be Mind Text later on
 -- TODO clean up and split this function
 -- | Compile `KawaiiLang' into `IO Text'.

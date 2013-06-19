@@ -92,8 +92,6 @@ import System.IO
 --            dangerous funcs either; specifically network ones.
 -- - Load UserStat from file.
 --      - Now we just need to be able to set it somewhere.
--- - Get name/host on PRIVMSG.
---      - Now just review it.
 
 
 main :: IO ()
