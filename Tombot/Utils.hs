@@ -47,9 +47,6 @@ import System.Timeout (timeout)
 import Text.XML.Light
 -- }}}
 
--- TODO
--- - Sort all the functions alphabetically.
-
 version :: Text
 version = "Tombot 0.2.0 (the cute :3c)"
 
@@ -79,10 +76,21 @@ defStChan = StChannel { stChanName = ""
                       , stChanFuncs = Whitelist []
                       }
 
+defStServ = StServer { stServHost = mempty
+                     , stServPort = 6667
+                     , stServChans = mempty
+                     , stServBotNicks = mempty
+                     , stServBotName = mempty
+                     , stServNickServId = Nothing
+                     , stServStat = Disconnected
+                     , stServUsers = mempty
+                     , stServThreads = mempty
+                     }
+
 defUser = User { userNick = ""
                , userName = ""
                , userHost = ""
-               , userStat = UserStat
+               , userStat = Online
                , userChans = M.empty
                }
 
@@ -177,12 +185,12 @@ toStConf (Config v d lg lp p fs) = StConfig { stConfVerb = v
                                             , stConfLogPath = lp
                                             , stConfPath = p
                                             , stConfFuncs = fs
-                                            , stConfHandles = M.empty
+                                            , stConfServs = M.empty
                                             }
 
 -- | From `Server' to `StServer'
-toStServ :: Handle -> Server -> StServer
-toStServ h (Server host port chans nicks name nsid) =
+toStServ :: Server -> StServer
+toStServ (Server host port chans nicks name nsid) =
     let stChans = map (\c -> (T.pack $ chanName c, toStChan c)) chans
         stNSId = if null nsid then Nothing else Just (T.pack nsid)
     in StServer { stServHost = host
@@ -191,7 +199,6 @@ toStServ h (Server host port chans nicks name nsid) =
                 , stServBotNicks = map T.pack nicks
                 , stServBotName = T.pack name
                 , stServNickServId = stNSId
-                , stServHandle = h
                 , stServStat = Connected
                 , stServUsers = M.empty
                 , stServThreads = mempty
@@ -200,13 +207,27 @@ toStServ h (Server host port chans nicks name nsid) =
 -- | When predicate `p' is True, run `m', otherwise return `mempty'.
 whenStat :: (UserStatus -> Bool) -> Mind () -> Mind ()
 whenStat p m = do
-    stat <- sees (userStat . currUser)
+    stat <- sees $ userStat . currUser
     when (p stat) m
 
 mwhenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
 mwhenStat p m = do
-    stat <- sees (userStat . currUser)
+    stat <- sees $ userStat . currUser
     mwhen (p stat) m
+
+whenUMode :: ([Char] -> Bool) -> Mind () -> Mind ()
+whenUMode p m = do
+    dest <- either userNick stChanName <$> sees currDest
+    chans <- sees $ userChans . currUser
+    let bool = maybe False p $ M.lookup dest chans
+    when bool m
+
+mwhenUMode :: Monoid a => ([Char] -> Bool) -> Mind a -> Mind a
+mwhenUMode p m = do
+    dest <- either userNick stChanName <$> sees currDest
+    chans <- sees $ userChans . currUser
+    let bool = maybe False p $ M.lookup dest chans
+    mwhen bool m
 
 -- }}}
 
@@ -306,7 +327,7 @@ httpGetResponse' url = liftIO $ withManager $ \man -> do
 httpGetResponse :: MonadIO m => String -> m (String, [(String, String)], String, String)
 httpGetResponse url = do
     let tryGet = liftIO $ do
-            mr <- timeout (10 ^ 7) (try $ httpGetResponse' url)
+            mr <- timeout (2 * 10 ^ 7) (try $ httpGetResponse' url)
             return $ maybe (Left Nothing) (either (Left . Just) Right) mr
     e <- tryGet
     case e of
@@ -333,13 +354,13 @@ httpGetString url = liftIO $ withManager $ \man -> do
 
 -- {{{ IO utils
 
--- TODO test these functions
-
+-- | Append to a temporary file and move it to the intended location.
 appendFileSafe :: MonadIO m => FilePath -> Text -> m ()
 appendFileSafe p t = liftIO $ do
     o <- T.readFile p
     writeFileSafe p $ o <> t
 
+-- | Write to a temporary file and move it to the intended location.
 writeFileSafe :: MonadIO m => FilePath -> Text -> m ()
 writeFileSafe p t = liftIO $ do
     (tp, th) <- openTempFile "/tmp" "append"
@@ -347,6 +368,26 @@ writeFileSafe p t = liftIO $ do
     hClose th
     copyFile tp p
     removeFile tp
+
+-- }}}
+
+-- {{{ IRC Text utils
+
+ctcp t = "\SOH" <> t <> "\SOH"
+
+isChan x | T.length x > 0 = T.head x == '#'
+         | otherwise = False
+
+toMode t = map modeChar t
+  where
+    modeChar '~' = 'q'
+    modeChar '&' = 'a'
+    modeChar '@' = 'o'
+    modeChar '%' = 'h'
+    modeChar '+' = 'v'
+
+isMod :: [Char] -> Bool
+isMod = any (`elem` "oaq")
 
 -- }}}
 
@@ -371,8 +412,7 @@ erro x = liftIO $ putStrLn $ "\x1b[0;31mError " <> show x <> "\x1b[0m"
 -- | Put a message to the current `Server'\'s `Handle'.
 write :: Text -> Mind ()
 write t = do
-    s <- sees currServ
-    let h = stServHandle s
+    h <- sees currHandle
     ex <- liftIO $ try $ do
         T.hPutStrLn h t
         T.putStrLn $ "\x1b[0;32m" <> t <> "\x1b[0m"
@@ -396,6 +436,10 @@ noNumeric n = warn $ n <> ": No Numeric argument"
 -- }}}
 
 -- {{{ Monoid utils
+
+-- | Equivalent of `void' returning `mempty' instead of `()'.
+mvoid :: (Monoid b, Monad m) => m a -> m b
+mvoid m = m >> return mempty
 
 -- | When `True', run the monadic action `m', otherwise return mempty in the
 --   current monad.
@@ -499,23 +543,6 @@ bisect p = fmap tail' . T.break p
   where
     tail' "" = ""
     tail' t = T.tail t
-
--- }}}
-
--- {{{ IRC Text utils
-
-ctcp t = "\SOH" <> t <> "\SOH"
-
-isChan x | T.length x > 0 = T.head x == '#'
-         | otherwise = False
-
-toMode t = map modeChar t
-  where
-    modeChar '~' = 'q'
-    modeChar '&' = 'a'
-    modeChar '@' = 'o'
-    modeChar '%' = 'h'
-    modeChar '+' = 'v'
 
 -- }}}
 

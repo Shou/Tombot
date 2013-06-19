@@ -13,7 +13,7 @@ home = "/home/<username>/"
 config = Config { confVerbosity = 2
                 , confLogging = True
                 , confLogPath = home ++ "irc/logs/"
-                , confPath = ""
+                , confPath = "Config.hs"
                 , confDir = home ++ "irc/"
                 , confFuncs = funcs
                 }

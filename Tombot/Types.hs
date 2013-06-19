@@ -32,7 +32,6 @@ import System.IO (Handle)
 -- }}}
 
 -- TODO
--- - Events
 
 -- XXX
 
@@ -48,12 +47,11 @@ instance Functor Allowed where
 instance Show (TMVar a) where
     show x = "TMVar _"
 
-data UserStatus = OfflineStat
-                | BannedStat
-                | UserStat
-                | OpStat
-                | AdminStat
-                | RootStat
+data UserStatus = Offline
+                | Banned
+                | Online
+                | Admin
+                | Root
                 deriving (Eq, Ord, Read, Show)
 
 data Personality = Deredere
@@ -138,13 +136,13 @@ data Server = Server { servHost :: String
                      , servNickServId :: String
                      } deriving (Show)
 
+-- XXX consider merging Current and StServer
 data StServer = StServer { stServHost :: String
                          , stServPort :: PortNumber
                          , stServChans :: Map Text StChannel
                          , stServBotNicks :: [Text]
                          , stServBotName :: Text
                          , stServNickServId :: Maybe Text
-                         , stServHandle :: Handle
                          , stServStat :: ServStatus
                          , stServUsers :: Map Text User
                          , stServThreads :: Map Text ThreadId
@@ -156,10 +154,10 @@ data Current = Current { currUser :: User
                        , currServ :: StServer
                        , currDest :: Either User StChannel
                        , currConfigTMVar :: TMVar StConfig
+                       , currHandle :: Handle
+                       , currThreadId :: ThreadId
                        } deriving (Typeable)
 
--- XXX we can remove `confModules' and `confDir', can't we?
---     If we just store the funcs in Config.hs, I see no reason not to.
 data Config = Config { confVerbosity :: Int
                      -- ^ Verbosity level.
                      -- 0: None
@@ -178,7 +176,7 @@ data StConfig = StConfig { stConfVerb :: Int
                          , stConfLogPath :: FilePath
                          , stConfPath :: FilePath
                          , stConfFuncs :: Funcs
-                         , stConfHandles :: Map String Handle
+                         , stConfServs :: Map String (TMVar Current)
                          }
 
 type Mind = StateT (TMVar Current) IO
@@ -186,13 +184,6 @@ type Decide e a = EitherT e Mind a
 
 type Funcs = Map Text Func
 type Func = Text -> Mind Text
-
--- TODO nicer way to do `Event' data
-data StEvent = StEvent (Mind (Maybe String, StEvent))
-
-data Event = Event { evtServs :: [Server]
-                   , evtMethod :: StEvent
-                   }
 
 -- XXX User data?
 --     wat

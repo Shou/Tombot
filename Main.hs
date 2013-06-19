@@ -11,39 +11,22 @@ module Main where
 
 -- {{{ Imports
 import Config
-import Tombot.Funcs
+import Tombot.Bot
 import Tombot.IRC
-import Tombot.Parser
 import Tombot.Types
 import Tombot.Utils
 
-import Control.Applicative
-import Control.Arrow
 import Control.Concurrent
 import Control.Concurrent.STM
-import Control.Error hiding (left, right)
-import Control.Exception (SomeException)
-import qualified Control.Exception as E
 import Control.Monad.State
 
-import Data.Attoparsec.Text (Parser)
-import qualified Data.Attoparsec.Text as A
-import Data.List
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Maybe
-import Data.Monoid
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
-import qualified Language.Haskell.Interpreter as H
-
-import Network
-
-import System.Exit
 import System.IO
-import System.Timeout
 -- }}}
 
 -- XXX
@@ -63,6 +46,7 @@ import System.Timeout
 --      - Del
 --      - .r or .reload for reloading modules.
 -- - Logging
+--      - Now just review it.
 -- - Privilege system
 --      - In progress
 --          - Just need to review the functions
@@ -83,7 +67,6 @@ import System.Timeout
 --      - Make a function that can only write 480 bytes of text to a Handle.
 --      - Only n messages per m seconds.
 --          - 5 messages per 3 seconds, drop everything after.
--- - Local IRC emulation.
 -- - Keep track of UserStat
 -- - Save lines to a file.
 --      - This will allow users to do something like:
@@ -110,171 +93,34 @@ import System.Timeout
 -- - Load UserStat from file.
 --      - Now we just need to be able to set it somewhere.
 -- - Get name/host on PRIVMSG.
+--      - Now just review it.
 
-
--- TODO move this to Utils
--- XXX is it better to move hPutStrLn elsewhere?
--- | IRC network server connecting function that waits for a successful
--- connection and returns the Handle.
-connecter :: MonadIO m => String -> PortNumber -> Text -> Text -> m Handle
-connecter host port nick name = liftIO $ connecter' 0
-  where
-    connecter' :: Int -> IO Handle
-    connecter' n = E.handle (onerror n) $ do
-        verb $ "Connection delay by " <> show n <> " seconds"
-        threadDelay (10^6 * n)
-        mh <- timeout (10^7) $ do
-            h <- connectTo host $ PortNumber port
-            te <- mkTextEncoding "UTF-8//TRANSLIT"
-            hSetEncoding h te
-            hSetBuffering h LineBuffering
-            hSetNewlineMode h (NewlineMode CRLF CRLF)
-            T.hPutStrLn h $ "NICK " <> nick
-            T.hPutStrLn h $ "USER " <> name <> " 0 * :" <> name
-            T.hPutStrLn h $ "CAP REQ :multi-prefix"
-            return h
-        maybe (connecter' $ inctime n) pure mh
-    inctime n = min 300 $ max n 1 * 2
-    onerror :: Int -> SomeException -> IO Handle
-    onerror n e = erro e >> connecter' (inctime n)
-
--- | Mind IRC server connector.
-connect :: Mind ()
-connect = do
-    server <- sees currServ
-    let host = stServHost server
-        port = stServPort server
-        nick = stServBotNicks server !! 0
-        name = stServBotName server
-    verb $ "Connecting to " <> host
-    h <- connecter host port nick name
-    mapConfig $ \c -> c { stConfHandles = M.insert host h $ stConfHandles c }
-    sets $ \k -> k { currServ = server { stServHandle = h } }
-
--- | Reconnect to the IRC network server.
-reconnect :: Mind ()
-reconnect = do
-    h <- sees $ stServHandle . currServ
-    liftIO $ hClose h
-    connect
-
--- | Initialise a Mind state.
-initialise :: Mind ()
-initialise = connect >> listen
-
--- TODO on Handle read exception
--- | Read the IRC handle.
-listen :: Mind ()
-listen = forever $ do
-    current <- see
-    let configt = currConfigTMVar current
-        server = currServ current
-        h = stServHandle server
-        tryGetLine :: Mind (Maybe Text)
-        tryGetLine = liftIO $ do
-            fmap join $ timeout (240*10^6) $ fmap hush $ try $ T.hGetLine h
-    mline <- do
-        verb "Reading from Handle..."
-        tryGetLine
-    maybe reconnect respond mline
-    liftIO $ verb "Successfully read from the Handle!"
-
--- | please
-respond :: Text -> Mind ()
-respond line = do
-    server <- sees currServ
-    let eirc = note line $ A.maybeResult $ A.parse ircparser line `A.feed` ""
-    flip (either warn) eirc $ \irc -> void . runEitherT $ do
-        liftIO $ print irc
-        onNick irc $ \_ -> do
-            nickUserlist irc
-        onMode irc $ \_ -> do
-            changeMode irc
-        onQuit irc $ \_ -> do
-            quitUserlist irc
-        onJoin irc $ \_ -> do
-            adaptJoin irc
-            modeJoin irc
-            joinUserlist irc
-            remind irc
-            greet irc
-        onPart irc $ \_ -> do
-            adaptPart irc
-            partUserlist irc
-        onTopic irc $ \(Topic nick name host c t) -> do
-            void $ modChanTopic c $ const t
-        onPing irc $ \(Ping t) -> write $ "PONG :" <> t
-        onPrivmsg irc $ \_ -> do
-            adaptPriv irc
-            ctcpVersion irc
-            printTell irc
-            runLang irc
-            onMatch irc
-        onInvite irc $ \_ -> do
-            joinInv irc
-        -- XXX see if we can find a Numeric printed after the MOTD instead
-        onNumeric "001" irc $ \_ -> do
-            welcomeNum irc
-        onNumeric "311" irc $ \_ -> do
-            whoisNum irc
-        onNumeric "324" irc $ \_ -> do
-            modeNum irc
-        onNumeric "332" irc $ \_ -> do
-            topicNum irc
-        onNumeric "353" irc $ \_ -> do
-            adaptNum irc
-            userlistNum irc
-        onNumeric "482" irc $ \_ -> do
-            privilegeNum irc
 
 main :: IO ()
 main = do
     configt <- newTMVarIO $ toStConf config
-    forM_ servers $ \server -> forkIO $ do
-        let host = servHost server
-            port = fromIntegral $ servPort server
-            nick = T.pack $ servBotNicks server !! 0
-            name = T.pack $ servBotName server
-        h <- connecter host port nick name
-        let stServer = toStServ h server
-            current = Current { currUser = defUser
-                              , currMode = ""
-                              , currServ = stServer
-                              , currDest = Left defUser
-                              , currConfigTMVar = configt
-                              }
-        currt <- newTMVarIO current
-        void $ runStateT initialise currt
-    userInput Nothing configt
+    forM_ servers $ \server -> forkIO $ initialise configt server
+    userInput configt
 
--- XXX this is a mess, make it GOOD and not BAD
--- TODO quit
--- |
-userInput :: Maybe String -> TMVar StConfig -> IO ()
-userInput mhost tmvar = do
-    line <- getLine
-    mhs <- fmap stConfHandles $ atomically $ readTMVar tmvar
-    let splitter x acc | x `isPrefixOf` line =
-            let n = length x
-            in Just (take n line, drop n line)
-        splitter _ acc = acc
-        mserver = foldr splitter Nothing $ M.keys mhs
-        mserver' = mserver <|> fmap (,line) mhost
-    let m = flip fmap mserver' $ \(host, msg) -> do
-        when ("QUIT" `isPrefixOf` dropWhile (== ' ') msg) $ do
-            forM_ (M.toList mhs) $ \(_, h) -> do
-                let quitmsg = "QUIT :Something un-cute happened. :c"
-                hPutStrLn h quitmsg
-                verb quitmsg
-            exitWith ExitSuccess
-        let mh = M.lookup host mhs
-            msg' = dropWhile (== ' ') msg
-        unless (null msg') $ do
-            let md = flip fmap mh $ \h -> do
-                hPutStrLn h msg'
-                putStrLn $ "\x1b[0;32m" <> msg' <> "\x1b[0m"
-            maybe (return ()) id md
-        return $ Just host
-    emhost' <- try $ maybe (return Nothing) id m
-    userInput (join $ hush emhost') tmvar
+-- | Direct input
+userInput :: TMVar StConfig -> IO ()
+userInput ct = loop $ do
+    line <- liftIO T.getLine
+    let (server, rest) = bisect (== ' ') line
+        (chan, mesg) = bisect (== ' ') rest
+    servs <- fmap stConfServs . liftIO . atomically $ readTMVar ct
+    let mserv = M.lookup (T.unpack server) servs
+    when (mserv /= Nothing) $ put mserv
+    let message = maybe rest (const mesg) mserv
+        channel = maybe server (const chan) mserv
+    ms <- get
+    flip (maybe $ return ()) ms $ \st -> void . liftIO . flip runStateT st $ do
+        let irc = Privmsg "Tombot" "" "" channel message
+        adaptPriv irc
+        let user = User "Tombot" "Tombot" "botnet.fbi.gov" Root M.empty
+        sets $ \c -> c { currUser = user }
+        runLang irc
+  where
+    loop :: StateT (Maybe (TMVar Current)) IO () -> IO ()
+    loop m = void . flip runStateT Nothing $ forever $ m
 
