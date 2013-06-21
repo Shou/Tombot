@@ -952,6 +952,7 @@ voice str = mode $ "+" <> vs <> " " <> T.unwords nicks
     nicks = T.words str
     vs = T.replicate (length nicks) "v"
 
+-- XXX isn't this in danger of recursing forever?
 -- TODO
 -- | Wikipedia summary fetching.
 wiki :: Func
@@ -960,20 +961,27 @@ wiki str = do
         url = T.unpack $ burl <> T.replace "+" "%20" str
     html <- liftIO $ httpGetString url
     let xml = fromMaybeElement $ parseXMLDoc html
+        qA = QName "a" Nothing Nothing
         qDiv = QName "div" (Just "http://www.w3.org/1999/xhtml") Nothing
-        qMwcontent = [Attr (QName "id" Nothing Nothing) "mw-content-text"]
+        qMwcontent = [attr "id" "mw-content-text"]
         element = fromMaybeElement $ findElementAttrs qDiv qMwcontent xml
         qPar = QName "p" Nothing Nothing
         ulPar = QName "ul" Nothing Nothing
         intro = findChild qPar element
         alts = findChild ulPar element
-        qMwsearch = [Attr (QName "class" Nothing Nothing) "mw-search-createlink"]
+        qMwsearch = [attr "class" "mw-search-result-heading"]
         search = findElementAttrs (QName "p" Nothing Nothing) qMwsearch element
-        -- TODO add more fallbacks
-        result = search <|> intro
-        text' = elemsText . fromMaybeElement $ result
+        sresults = fromMaybeElement $ search
+        stext = elemsText . fromMaybeElement $ findElement qA sresults
+        text' = elemsText . fromMaybeElement $ intro
         text = if isSuffixOf "may refer to:" text'
                then elemsText . fromMaybeElement $ alts
                else text'
-    return . T.strip $ T.pack text
+    verb alts
+    verb search >> verb sresults
+    if isJust search
+    then wiki $ T.pack stext
+    else return . T.strip $ T.pack text
+  where
+    attr t v = Attr (QName t Nothing Nothing) v
 

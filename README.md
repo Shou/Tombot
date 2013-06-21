@@ -9,6 +9,8 @@ See `Config.example.hs` for options.
 ## Install
 
 To install, run `cabal install` in the root of her directory.
+This assumes you have <a href=http://haskell.org/>Haskell Platform</a>
+installed; if not, go install it.
 
 ## Kawaiilang
 

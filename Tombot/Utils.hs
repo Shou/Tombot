@@ -487,7 +487,10 @@ write t = do
 -- | Put a private message using `write'
 putPrivmsg :: Text -> Text -> Mind ()
 putPrivmsg d t = unless (T.null t) $ do
-    write . T.take 420 $ "PRIVMSG " <> d <> " :" <> t
+    let t' = if T.length t > 420
+             then T.take 420 t <> "…"
+             else t
+    write $ "PRIVMSG " <> d <> " :" <> t'
 
 -- | Fork for the Mind monad
 forkMi :: Mind () -> Mind ThreadId

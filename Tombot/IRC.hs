@@ -242,9 +242,12 @@ adaptMode (Mode nick name host chan _ _) = do
 -- |
 changeMode :: IRC -> Mind ()
 changeMode (Mode nick name host chan chars mtext) =
-    plus chars $ maybe [] T.words mtext
+    mode chars $ maybe [] T.words mtext
   where
     usermodes = "vhoaq"
+    mode ('+':xs) ys = plus xs ys
+    mode ('-':xs) ys = minus xs ys
+    mode _ _ = return ()
     plus [] _ = return ()
     plus ('-':xs) ys = minus xs ys
     plus (x:xs) ys
