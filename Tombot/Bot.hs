@@ -83,7 +83,6 @@ respond line = do
             quitUserlist irc
         onJoin irc $ \_ -> do
             adaptJoin irc
-            modeJoin irc
             joinUserlist irc
             remind irc
         onPart irc $ \_ -> do
@@ -118,6 +117,8 @@ respond line = do
             userlistNum irc
         onNumeric "376" irc $ \_ -> do
             welcomeNum irc
+        onNumeric "433" irc $ \_ -> do
+            cycleNick irc
         onNumeric "482" irc $ \_ -> do
             privilegeNum irc
 

@@ -58,6 +58,34 @@ manyTillKeep p end = scan ([], [])
     scan (xs, mv) = fmap (xs,) end <|> (fmap (snoc xs) p >>= scan . (,mv))
     snoc xs x = xs `mappend` [x]
 
+-- | Parse something in between two `Char's. Does not consume the last `Char'.
+inside :: Char -> Parser String
+inside x = A.many1 $ escesc <|> escape x <|> A.notChar x
+  where
+    escesc = A.char '\\' >> A.char '\\'
+    escape x = A.char '\\' >> A.char x
+
+parsematch :: Parser (String, Bool, String)
+parsematch = do
+    x <- A.satisfy (not . isAlphaNum)
+    mat <- inside x
+    A.char x
+    ins <- fmap (/= 'i') $ A.try (A.char 'i' <|> return 'z')
+    text <- T.unpack <$> (A.try A.space >> A.takeText) <|> return ""
+    return (mat, ins, text)
+
+parsesed :: Parser (String, String, Bool, String)
+parsesed = do
+    A.char 's'
+    x <- A.satisfy (not . isAlphaNum)
+    mat <- inside x
+    A.char x
+    rep <- inside x
+    A.char x
+    ins <- fmap (/= 'i') . A.try $ A.char 'i' <|> return 'z'
+    text <- T.unpack <$> (A.try A.space >> A.takeText) <|> return ""
+    return (mat, rep, ins, text)
+
 -- }}}
 
 -- {{{ Config utils
@@ -204,33 +232,53 @@ toStServ (Server host port chans nicks name nsid) =
                 , stServThreads = mempty
                 }
 
--- | When predicate `p' is True, run `m', otherwise return `mempty'.
-whenStat :: (UserStatus -> Bool) -> Mind () -> Mind ()
+-- | When predicate `p' is True, run `m', otherwise return `()'.
+whenStat :: (Either [Char] UserStatus -> Bool) -> Mind () -> Mind ()
 whenStat p m = do
+    dest <- either userNick stChanName <$> sees currDest
+    chans <- sees $ userChans . currUser
     stat <- sees $ userStat . currUser
-    when (p stat) m
+    let isMode = maybe False (p . Left) $ M.lookup dest chans
+        isStat = p $ Right stat
+    case () of
+      _ | isMode -> m
+        | isStat -> m
+        | otherwise -> return ()
 
-mwhenStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
+-- | When predicate `p' is True, run `m', otherwise return `mempty'.
+mwhenStat :: Monoid a => (Either [Char] UserStatus -> Bool) -> Mind a -> Mind a
 mwhenStat p m = do
+    dest <- either userNick stChanName <$> sees currDest
+    chans <- sees $ userChans . currUser
     stat <- sees $ userStat . currUser
-    mwhen (p stat) m
+    let isMode = maybe False (p . Left) $ M.lookup dest chans
+        isStat = p $ Right stat
+    case () of
+      _ | isMode -> m
+        | isStat -> m
+        | otherwise -> return mempty
 
-whenUMode :: ([Char] -> Bool) -> Mind () -> Mind ()
-whenUMode p m = do
-    dest <- either userNick stChanName <$> sees currDest
-    chans <- sees $ userChans . currUser
-    let bool = maybe False p $ M.lookup dest chans
-    when bool m
+mwhenPrivileged :: Monoid a => Mind a -> Mind a
+mwhenPrivileged = mwhenStat (either isMod (>= Admin))
 
-mwhenUMode :: Monoid a => ([Char] -> Bool) -> Mind a -> Mind a
-mwhenUMode p m = do
-    dest <- either userNick stChanName <$> sees currDest
-    chans <- sees $ userChans . currUser
-    let bool = maybe False p $ M.lookup dest chans
-    verb dest
-    verb chans
-    verb bool
-    mwhen bool m
+mwhenUserStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
+mwhenUserStat p = mwhenStat (either (const False) p)
+
+-- }}}
+
+-- {{{ Decide utils
+
+-- | Run an EitherT monad inside Mind.
+decide :: Decide e a -> Mind (Either e a)
+decide m = runEitherT m
+
+-- | Run an EitherT monad and print a warning if `left'.
+warnDecide :: Decide Text () -> Mind ()
+warnDecide m = either warn return =<< decide m
+
+-- | Run an EitherT monad and print an error if `left'.
+erroDecide :: Decide Text () -> Mind ()
+erroDecide m = either erro return =<< decide m
 
 -- }}}
 
@@ -376,11 +424,15 @@ writeFileSafe p t = liftIO $ do
 
 -- {{{ IRC Text utils
 
+ctcp :: Text -> Text
 ctcp t = "\SOH" <> t <> "\SOH"
 
+-- | Is it a channel?
 isChan :: Text -> Bool
 isChan = T.isPrefixOf "#"
 
+-- | From symbols to MODE characters.
+toMode :: [Char] -> [Char]
 toMode t = map modeChar t
   where
     modeChar '~' = 'q'
@@ -389,8 +441,19 @@ toMode t = map modeChar t
     modeChar '%' = 'h'
     modeChar '+' = 'v'
 
+-- | Is the MODE +a +o or +q?
 isMod :: [Char] -> Bool
 isMod = any (`elem` "oaq")
+
+-- | Join several messages with "|" and only until 420 chars.
+pipeJoin :: [Text] -> (Maybe Text, [Text])
+pipeJoin [] = (Nothing, [])
+pipeJoin (x:[]) = (Just x, [])
+pipeJoin (x:y:z:xs) | T.length (x <> y <> z) < 420 =
+    let x' = Just $ x <> " | " <> y <> " | " <> z
+    in (x', xs)
+pipeJoin (x:y:xs) | T.length (x <> y) < 420 = (Just $ x <> " | " <> y, xs)
+                  | otherwise = (Just x, y:xs)
 
 -- }}}
 

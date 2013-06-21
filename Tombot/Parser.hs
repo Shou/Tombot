@@ -90,7 +90,6 @@ khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
 botparser :: [Char] -> [Text] -> Parser KawaiiLang
 botparser ps fs = skipPrefix ps >> limbs fs
 
--- TODO typeOf fs
 -- | Match against parts of a KawaiiLang command, where Funcs, Opers and Parens
 -- make up the parts.
 limbs :: [Text] -> Parser KawaiiLang
@@ -163,7 +162,6 @@ args = do
 
 ignoreSpaces = A.skipWhile (== ' ')
 
--- TODO typeOf fs -- wat
 -- | Match against a full function such as `"> I am (very) hungry."`.
 fullCmd :: [Text] -> Parser KawaiiLang
 fullCmd fs = do
@@ -176,7 +174,7 @@ fullCmd fs = do
     lefts = ["eval", "event", "help", "let", "on"]
 
 -- TODO figure out how ++ keeps spaces but not <- and ->
--- XXX will be Mind Text later on
+--      - The parser strips spaces at the end, that's how. Get rid of that.
 -- TODO clean up and split this function
 -- | Compile `KawaiiLang' into `IO Text'.
 compile :: Map Text Func -> KawaiiLang -> Mind Text
@@ -244,11 +242,16 @@ user = do
     A.space
     return $ (nick, name, host)
 
+network = do
+    A.char ':'
+    server <- A.takeWhile (/= ' ')
+    A.space
+    return (server, server, server)
+
 nick = do
     (nick, name, host) <- user
     A.string "NICK"
     A.space
-    A.char ':'
     text <- A.takeText
     return $ Nick nick name host text
 
@@ -258,7 +261,7 @@ nick = do
 --        `MODE #channel +vvvv Shou Dark Aria lunar'
 
 mode = do
-    (nick, name, host) <- user
+    (nick, name, host) <- user <|> network
     A.string "MODE"
     A.space
     chan <- A.takeWhile (/= ' ')
@@ -290,8 +293,9 @@ part = do
     A.string "PART"
     A.space
     chan <- A.takeWhile (/= ' ')
-    A.space
-    A.char ':'
+    A.try $ do
+        A.space
+        A.char ':'
     text <- A.takeText
     return $ Part nick name host chan text
 
@@ -317,7 +321,7 @@ invite = do
 
 -- XXX might be incorrect
 kick = do
-    (nick, name, host) <- user
+    (nick, name, host) <- user <|> network
     A.string "KICK"
     A.space
     chans <- A.takeWhile (/= ' ')
@@ -329,7 +333,7 @@ kick = do
     return $ Kick nick name host chans nicks text
 
 privmsg = do
-    (nick, name, host) <- user
+    (nick, name, host) <- user <|> network
     A.string "PRIVMSG"
     A.space
     dest <- A.takeWhile (/= ' ')
@@ -339,7 +343,7 @@ privmsg = do
     return $ Privmsg nick name host dest text
 
 notice = do
-    (nick, name, host) <- user
+    (nick, name, host) <- user <|> network
     A.string "NOTICE"
     A.space
     dest <- A.takeWhile (/= ' ')

@@ -6,7 +6,18 @@ Tombot, a mix of "tomboy" and "bot", is an IRC bot that does useless things, suc
 
 See `Config.example.hs` for options.
 
+## Install
+
 To install, run `cabal install` in the root of her directory.
+
+## Kawaiilang
+
+The bot comes with its own small language that can be used for various things.
+The language is supposed to be composable through the use of operators.
+An example of the syntax: `:(ra True| >< gay Hi!) <> gay Bye!` where `ra` and
+`gay` are functions, the subsequent text are their arguments and `><` and `<>`
+are operators. Parentheses are also supported to enclose functions, and are
+useful because operators are left associative.
 
 ## Functions
 
@@ -99,6 +110,16 @@ Colour a string with the rainbow.<br>
 Syntax: `gay <string>`
 Example: `:gay Lesbian Gay Bi Trans`
 
+* `len`
+Length of a string.<br>
+Syntax: `len <string>`
+Example: `:us -> len`
+
+* `let`
+Define a new function by composing old ones.<br>
+Syntax: `let <string> <kawaiilang>`
+Example: `:let randomuser :us -> sed s/ /|/ -> ra`
+
 * `raw`
 Control the bot directly; raw IRC message.<br>
 Syntax: `raw <string>`
@@ -109,15 +130,75 @@ A regex replace function.<br>
 Syntax: `sed s/<match>/<replacement>/[i] <string>`
 Example: `:> I love bananas! -> sed s/banana/apple/`
 
-* `wiki`
-Prints the top paragraph of a Wikipedia article.<br>
-Syntax: `wiki <string>`
-Example: `:wiki haskell programming language`
+* `bots`
+Confirms that it is a bot.<br>
+
+* `eval`
+Evaluate Kawaii Language code.<br>
+Syntax: `eval <kawaiilang>`
+Example: `:eval :> Hi!`
+
+* `help`
+
+* `host`
+
+* `http`
 
 * `isup`
 Prints the status of a website.<br>
 Syntax: `isup <url>`
 Example: `:isup haskell.org`
+
+* `join`
+
+* `kill`
+
+* `name`
+
+* `nick`
+
+* `part`
+
+* `quit`
+
+* `show`
+
+* `stat`
+
+* `tell`
+
+* `verb`
+
+* `wiki`
+Prints the top paragraph of a Wikipedia article.<br>
+Syntax: `wiki <string>`
+Example: `:wiki haskell programming language`
+
+* `cjoin`
+
+* `event`
+
+* `funcs`
+
+* `greet`
+
+* `nicks`
+
+* `sleep`
+
+* `title`
+
+* `topic`
+
+* `cajoin`
+
+* `cutify`
+
+* `prefix`
+
+* `britify`
+
+* `connect`
 
 ## Operators
 * `->`
@@ -148,7 +229,31 @@ Example: `:ra You're dead, kid!| >< b John`
 And append; return both functions' outputs appended only if both return something. `Lazy`<br>
 Example: `:`
 
-⑨
+## Function config files
+
+Some functions have files associated with them. These files are stored in the
+config directory as defined in `Config.hs`. These files are:
+
+* `help`
+This is the help file, and it is included with the bot, you just need to move
+it to the directory.
+
+* `tell`
+This is the file that is filled with tells from the `tell` function, which are
+messages printed when a user shows activity.
+
+* `respond`
+This is the file that is filled with ons from the `on` function, which are
+regex matches and the Kawaiilang to run on match.
+
+* `letfuncs`
+
+* `britify`
+
+* `cutify`
+
+
+⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨
 <br>
-♡
+♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡
 

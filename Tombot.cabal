@@ -23,12 +23,14 @@ Executable tombot
         either,
         errors,
         hint,
+        HTTP,
         http-conduit,
         http-conduit-browser,
         http-types,
         json,
         mtl,
         network,
+        old-locale,
         random,
         regex-compat,
         stm,
@@ -39,12 +41,13 @@ Executable tombot
     Main-Is:
         Main.hs
 
-Library
-    Exposed-Modules:
-        Tombot.Funcs
-        Tombot.Bot
-        Tombot.Parser
-        Tombot.IRC
-        Tombot.Types
-        Tombot.Utils
+-- Library
+--     Exposed-Modules:
+--         Tombot.Bot
+--         Tombot.Funcs
+--         Tombot.IRC
+--         Tombot.Net
+--         Tombot.Parser
+--         Tombot.Utils
+--         Tombot.Types
 

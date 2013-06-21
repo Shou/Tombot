@@ -20,9 +20,7 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad.State
 
-import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
@@ -52,14 +50,13 @@ import System.IO
 --          - Just need to review the functions
 -- - Rejoin on Handle error
 --      - Search for hPutStr and the likes
+--      - Close Handles on reconnection.
+--          - Make sure no Handle errors/reconnects are mistaken, such as the
+--            reconnect loop one because two Eithers were joined.
 -- - Add quit and part messages to config data
 -- - UTF-8 encoding
---      - #shrug
---      - make it SAFE
+--      - Now just review this.
 -- - Personality/mood
--- - Close Handles on reconnection.
---      - Make sure no Handle errors/reconnects are mistaken, such as the
---        reconnect loop one because two Eithers were joined.
 -- - Run anything the bot writes through the parser. Or at least user commands.
 --      - This means changes are made when the bot does something, such as NICK
 --      - We've already set the bot up to be able to do this! `respond'!
@@ -68,6 +65,7 @@ import System.IO
 --      - Only n messages per m seconds.
 --          - 5 messages per 3 seconds, drop everything after.
 -- - Keep track of UserStat
+--      - Now just review this.
 -- - Save lines to a file.
 --      - This will allow users to do something like:
 --        :on /abc(d)/ :load file -> ra
@@ -81,8 +79,9 @@ import System.IO
 --      - Write the `funcs' to a file "letfuncs" and then if it exists there,
 --        the function is user defined. This is local to the channel.
 --      - Local to channel
--- - Make it load the `Config' file on start so we don't need to recompile
---      - Alternatively load from a non-Haskell file.
+-- - Deprecate the Config import, instead opting for plaintext and/or command
+--   line arguments and shape Config from that.
+-- - Kanji lookup function
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -92,6 +91,9 @@ import System.IO
 --            dangerous funcs either; specifically network ones.
 -- - Load UserStat from file.
 --      - Now we just need to be able to set it somewhere.
+-- - Modes are buggy still
+-- - Make a function `kawaiiparse' that lessens the amount of code; we've copy-
+--   pasted the same KawaiiLang compiling code all over the place.
 
 
 main :: IO ()

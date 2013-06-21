@@ -5,10 +5,6 @@
 
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE StandaloneDeriving #-}
--- {-# LANGUAGE TypeSynonymInstances #-}
--- {-# LANGUAGE FlexibleInstances #-}
--- {-# LANGUAGE TemplateHaskell #-}
--- {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Tombot.Types where

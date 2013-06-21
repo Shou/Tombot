@@ -10,6 +10,7 @@ module Tombot.IRC where
 
 -- {{{ Imports
 import Tombot.Funcs
+import Tombot.Net
 import Tombot.Parser
 import Tombot.Types
 import Tombot.Utils
@@ -34,6 +35,7 @@ import qualified Data.Text as T
 import Data.Time (formatTime, getCurrentTime)
 
 import System.Locale (defaultTimeLocale)
+import System.Random (randomRIO)
 
 import Text.Regex
 -- }}}
@@ -109,11 +111,20 @@ joinUserlist (Join nick name host chan) = do
 -- TODO limit to one message?
 -- | Remind the user with the user's message.
 remind :: IRC -> Mind ()
-remind (Join cnick name host chan) = do
+remind (Join nick name host d) = do
     mrems <- readLocalStored "remind"
-    let rems = maybe mempty M.toList mrems
-    forM_ rems $ \(nick, msg) -> when (cnick == nick) $ do
-        putPrivmsg chan $ nick <> ": " <> msg
+    let rem = maybe "" id $ M.lookup nick $ maybe mempty id mrems
+    server <- sees currServ
+    funcs <- stConfFuncs <$> readConfig
+    let echan = note ("No channel: " <> d) $ M.lookup d $ stServChans server
+        e = flip fmap echan $ \chan -> do
+        let parser = botparser (stChanPrefix chan) (M.keys funcs)
+            mkl = A.maybeResult . flip A.feed "" $ A.parse parser rem
+            me = flip fmap mkl $ \kl -> void . forkMi $ do
+                t <- compile funcs kl
+                putPrivmsg d $ nick <> ": " <> t
+        maybe (return ()) id me
+    either warn id e
 
 -- |
 greet :: IRC -> Mind ()
@@ -146,10 +157,6 @@ adaptJoin (Join nick name host chan) = do
     set current'
     modUserlist $ M.insert nick user
 
-modeJoin :: IRC -> Mind ()
-modeJoin (Join nick name host chan) = do
-    write $ "MODE " <> chan
-
 -- }}}
 
 -- {{{ Kick
@@ -179,7 +186,6 @@ adaptKick (Kick nick name host chan nicks text) = do
     set current'
     modUserlist $ M.insert nick user
 
--- TODO
 -- | When the bot is kicked, rejoin if `chanAutoJoin' is `True'.
 botKick :: IRC -> Mind ()
 botKick (Kick nick name host chans nicks text) = do
@@ -192,7 +198,6 @@ botKick (Kick nick name host chans nicks text) = do
   where
     noChan = ("Not a channel, " <>)
 
--- TODO
 -- | Remove a user's channel on kick.
 userlistKick :: IRC -> Mind ()
 userlistKick (Kick nick name host chans nicks text) = do
@@ -232,7 +237,7 @@ adaptMode (Mode nick name host chan _ _) = do
     set current'
     modUserlist $ M.insert nick user
 
--- TODO check if UserMode is less than OP then change UserStat accordingly
+-- Mode {modeNick = "Squirtle", modeName = "water", modeHost = "bots.adelais.net", modeChan = "#tac", modeChars = "+o", modeText = Just "sm"}
 -- TODO move `minus' and `plus' to Utils.
 -- |
 changeMode :: IRC -> Mind ()
@@ -240,30 +245,31 @@ changeMode (Mode nick name host chan chars mtext) =
     plus chars $ maybe [] T.words mtext
   where
     usermodes = "vhoaq"
-    ops = "oaq"
     plus [] _ = return ()
     plus ('-':xs) ys = minus xs ys
     plus (x:xs) ys
         | any (== x) usermodes && length ys > 0 = do
             e <- modUser (ys !! 0) $ \u ->
                 let chans = userChans u
-                    chans' = M.adjust (sort . (x :)) chan chans
+                    f = maybe (Just [x]) (Just . sort . (x :))
+                    chans' = M.alter f chan chans
                 in u { userChans = chans' }
             either warn return e
             plus xs $ tail ys
-        | not $ any (== x) usermodes  = do
+        | not $ any (== x) usermodes = do
             e <- modChan chan $ \c ->
                 c { stChanMode = x : stChanMode c }
             either warn return e
             plus xs $ tailSafe ys
-        | otherwise = return ()
+        | otherwise = warn "Missing MODE argument"
     minus [] _ = return ()
     minus ('+':xs) ys = plus xs ys
     minus (x:xs) ys
         | any (== x) usermodes && length ys > 0 = do
             e <- modUser (ys !! 0) $ \u ->
                 let chans = userChans u
-                    chans' = M.adjust (filter (/= x)) chan chans
+                    f = maybe (Just []) (Just . filter (/= x))
+                    chans' = M.alter f chan chans
                 in u { userChans = chans' }
             either warn return e
             minus xs $ tail ys
@@ -272,7 +278,7 @@ changeMode (Mode nick name host chan chars mtext) =
                 c { stChanMode = filter (/= x) (stChanMode c) }
             either warn return e
             minus xs $ tailSafe ys
-        | otherwise = return ()
+        | otherwise = warn "Missing MODE argument"
 
 -- }}}
 
@@ -393,27 +399,14 @@ printTell (Privmsg nick _ _ dest text) = do
     serv <- sees $ stServHost . currServ
     tmvar <- sees currConfigTMVar
     dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
-    mtells <- readConf $ dir <> "tell"
-    let mchans = join $ M.lookup serv <$> mtells
-        musers = join $ M.lookup dest <$> mchans
-        mtexts = join $ M.lookup nick <$> musers
+    musers <- readLocalStored "tell"
+    let mtexts = join $ M.lookup nick <$> musers
         msgs = maybe [] id mtexts
-        (msg, msgs') = maybeTwo msgs
+        (msg, msgs') = pipeJoin msgs
         users = maybe (M.singleton nick msgs) (M.insert nick msgs') musers
-        chans = maybe (M.singleton dest users) (M.insert dest users) mchans
-        servers = maybe (M.singleton serv chans) (M.insert serv chans) mtells
     when (isJust msg) $ do
-        writeConf (dir <> "tell") servers
+        modLocalStored "tell" $ const users
         putPrivmsg dest $ nick <> ", " <> fromJust msg
-  where
-    maybeTwo :: [Text] -> (Maybe Text, [Text])
-    maybeTwo [] = (Nothing, [])
-    maybeTwo (x:[]) = (Just x, [])
-    maybeTwo (x:y:z:xs) | T.length (x <> y <> z) < 420 =
-        let x' = Just $ x <> " | " <> y <> " | " <> z
-        in (x', xs)
-    maybeTwo (x:y:xs) | T.length (x <> y) < 420 = (Just $ x <> " | " <> y, xs)
-                      | otherwise = (Just x, y:xs)
 
 -- |
 onMatch :: IRC -> Mind ()
@@ -427,11 +420,10 @@ onMatch irc@(Privmsg nick name host dest text) = do
         let e = flip fmap emins $ \mins -> do
             let m = flip fmap mins $ \ins -> do
                 -- FIXME who needs indexes larger than 9 anyway?!?!
-                let indexes = [ '\\' : show x | x <- [0 ..]]
-                    replacer = zipWith replace indexes ins
+                let indexes = [ '\\' : show x | x <- [0 .. 9]]
+                    replacer = zipWith replace indexes (T.unpack text : ins)
                     resp' = foldr ($) resp replacer
-                    resp'' = T.unpack $ T.replace "%nick%" nick (T.pack resp')
-                runLang $ irc { privText = T.pack resp'' }
+                runLang $ irc { privText = T.pack resp' }
             maybe (return ()) id m
         either warn id e
   where
@@ -525,6 +517,33 @@ adaptNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
   where
     noArgs = "No `numArgs' in Numeric " <> n
 
+-- TODO
+-- | Cycle through the available nicks, and/or attempt to GHOST the prioritized
+--   nick.
+cycleNick :: IRC -> Mind ()
+cycleNick (Numeric n ma t) = warnDecide $ do
+    server <- lift $ sees $ T.pack . stServHost . currServ
+    cnicks <- lift $ sees $ stServBotNicks . currServ
+    mnspw <- lift $ sees $ stServNickServId . currServ
+    case cnicks of
+      [] -> left $ "No nicks for " <> server
+      [nick] -> lift $ do
+        n <- T.pack . show <$> liftIO (randomRIO (0 :: Int, 999))
+        let nicks = T.take 12 nick <> n : cnicks
+        sets $ \c -> c { currServ = (currServ c) { stServBotNicks = nicks } }
+      _ -> lift $ do
+        let nicks = take (length cnicks) . drop 1 $ cycle cnicks
+        sets $ \c -> c { currServ = (currServ c) { stServBotNicks = nicks } }
+    lift reconnect
+    flip (maybe $ return ()) mnspw $ \nspw -> do
+        mnick <- lift . fmap headMay . sees $ stServBotNicks . currServ
+        unless (isJust mnick) $ left $ "No nicks for " <> server
+        let nick = fromJust mnick
+        lift $ putPrivmsg "nickserv" $ "GHOST " <> nick <> " " <> nspw
+        lift $ sets $ \c ->
+            c {currServ = (currServ c) { stServBotNicks = cnicks } }
+        lift $ write $ "NICK " <> nick
+
 -- |
 welcomeNum :: IRC -> Mind ()
 welcomeNum _ = do
@@ -552,13 +571,11 @@ whoisNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
 
 -- |
 topicNum :: IRC -> Mind ()
-topicNum (Numeric n ma t) =
-    if isJust ma
-    then modChanTopic (fromJust ma) (const t) >>= verb
-    else noNumeric "332"
+topicNum (Numeric n ma t) = void . decide $ do
+    unless (isJust ma) $ lift (noNumeric "332") >> left ()
+    lift $ modChanTopic (fromJust ma) (const t) >>= verb
 
 -- TODO a way to get the name and host of users on join
--- TODO load `config' file with Server > Channel > Nick
 -- |
 userlistNum :: IRC -> Mind ()
 userlistNum (Numeric n ma t) = do
@@ -586,6 +603,7 @@ modeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     let (chan, mode) = dropWhile (== '+') . T.unpack <$> bisect (== ' ') a
     e <- modChan chan $ \c -> c { stChanMode = mode }
     either warn return e
+    write $ "MODE " <> a
   where
     noArgs = "No `numArgs' in Numeric " <> n
 
