@@ -765,7 +765,7 @@ stat str = do
                 in u { userStat = maybe stat id mv }
             return $ either id (const "") e
   where
-    (nick, value) = first T.strip . second T.strip $ bisect (== '=') str
+    (nick, value) = bisect (== ' ') str
 
 -- | Delay a function by n seconds where n is a floating point number.
 sleep :: Func
@@ -871,6 +871,7 @@ translate str = do
                              , "&sl=" <> sl <> "&tl=" <> tl <> "&q=" <> x
                              ]
     jsonStr <- httpGetString $ url "auto" tl $ urlEncode string
+    verb jsonStr
     let m = A.maybeResult . flip A.feed "" $ A.parse parser $ T.pack jsonStr
     return . T.concat $ maybe [] id m
   where
@@ -968,20 +969,20 @@ wiki str = do
         qPar = QName "p" Nothing Nothing
         ulPar = QName "ul" Nothing Nothing
         intro = findChild qPar element
-        alts = findChild ulPar element
+        alts = fromMaybeElement $ findChild ulPar element
+        atext = elemsText . fromMaybeElement $ findElement qA alts
         qMwsearch = [attr "class" "mw-search-result-heading"]
-        search = findElementAttrs (QName "p" Nothing Nothing) qMwsearch element
+        search = findElementAttrs (QName "div" Nothing Nothing) qMwsearch element
         sresults = fromMaybeElement $ search
         stext = elemsText . fromMaybeElement $ findElement qA sresults
-        text' = elemsText . fromMaybeElement $ intro
-        text = if isSuffixOf "may refer to:" text'
-               then elemsText . fromMaybeElement $ alts
-               else text'
-    verb alts
-    verb search >> verb sresults
-    if isJust search
-    then wiki $ T.pack stext
-    else return . T.strip $ T.pack text
+        text = elemsText . fromMaybeElement $ intro
+    case () of
+      _ | isJust search -> wiki $ T.pack stext
+        | isMulti text -> wiki $ T.pack atext
+        | otherwise -> return . T.strip $ T.pack text
   where
+    isMulti t = any (`isSuffixOf` t) [ "may refer to:"
+                                     , "can stand for:"
+                                     ]
     attr t v = Attr (QName t Nothing Nothing) v
 

@@ -91,7 +91,6 @@ import System.IO
 --            dangerous funcs either; specifically network ones.
 -- - Load UserStat from file.
 --      - Now we just need to be able to set it somewhere.
--- - Modes are buggy still
 -- - Make a function `kawaiiparse' that lessens the amount of code; we've copy-
 --   pasted the same KawaiiLang compiling code all over the place.
 

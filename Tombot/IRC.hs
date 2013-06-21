@@ -237,7 +237,6 @@ adaptMode (Mode nick name host chan _ _) = do
     set current'
     modUserlist $ M.insert nick user
 
--- Mode {modeNick = "Squirtle", modeName = "water", modeHost = "bots.adelais.net", modeChan = "#tac", modeChars = "+o", modeText = Just "sm"}
 -- TODO move `minus' and `plus' to Utils.
 -- |
 changeMode :: IRC -> Mind ()
