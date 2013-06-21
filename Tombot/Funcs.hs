@@ -873,6 +873,7 @@ translate str = do
     jsonStr <- httpGetString $ url "auto" tl $ urlEncode string
     verb jsonStr
     let m = A.maybeResult . flip A.feed "" $ A.parse parser $ T.pack jsonStr
+    unless (isJust m) $ warn "translate: Parsing failed."
     return . T.concat $ maybe [] id m
   where
     parser :: Parser [Text]
