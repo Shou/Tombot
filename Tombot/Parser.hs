@@ -7,14 +7,16 @@
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE TupleSections #-}
 
-module Tombot.Parser (botparser, ircparser, compile) where
+module Tombot.Parser (botparse, botparser, ircparser, compile) where
 
 -- {{{ Imports
 import Tombot.Types
 import Tombot.Utils
 
 import Control.Applicative
+import Control.Error
 import Control.Monad
+import Control.Monad.Trans
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
@@ -36,7 +38,7 @@ data KawaiiLang = Func Text Text KawaiiLang
                 | Oper Text KawaiiLang
                 | Parens KawaiiLang KawaiiLang
                 | Kempty
-                deriving (Show)
+                deriving (Eq, Read, Show)
 
 instance Monoid KawaiiLang where
     mempty = Kempty
@@ -224,6 +226,18 @@ compile funcs = klToText mempty
         kwhen (Oper "<-" _) = True
         kwhen _ = False
     klToText old Kempty = pure old
+
+-- |
+botparse :: Funcs -> Text -> Mind KawaiiLang
+botparse funcs t = fmap (either id id) . decide $ do
+    d <- either userNick stChanName . currDest <$> lift see
+    chans <- stServChans . currServ <$> lift see
+    let mchan = M.lookup d chans
+    unless (isJust mchan) $ lift (warn $ "No channel " <> d) >> left Kempty
+    let chan = fromJust mchan
+        parser = botparser (stChanPrefix chan) (M.keys funcs)
+        mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
+    return $ maybe Kempty id mkl
 
 -- }}}
 

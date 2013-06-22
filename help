@@ -1,6 +1,7 @@
 fromList
 [ ("!", "!<bang> <string> | Search DuckDuckGo using a !bang tag.")
 , ("b", "b <nick> ... | Ban a user, or several. [Op]")
+, ("me", "me <string> | Perform an action with the bot.")
 , ("<", "< <string> | Send a string as a private message.")
 , (">", "> <string> | Print a string.")
 , ("k", "k <nick> ... | Kick a user, or several. [Op]")
@@ -30,7 +31,7 @@ fromList
 , ("nick", "nick | Print the user's nick.")
 , ("quit", "quit | Make the bot quit the IRC server. [Admin]")
 , ("ra", "ra <choice> | <choice> ... | Choose between several choices.")
-, ("re", "re <nick> <kawaiilang> | Add a reminder for someone; printed on join.")
+, ("re", "re <nick> [<kawaiilang> | <string>] | Add a reminder for someone; printed on join.")
 , ("stat", "stat <nick> [<string>] | Display or change a user's stat.")
 , ("tell", "tell <nick> <message> | Tell a user something next time she talks.")
 , ("wiki", "wiki [<language>] <string> | Print the summary of a Wikipedia page.")
@@ -70,5 +71,5 @@ fromList
 , ("readme", "https://github.com/Shou-/Tombot#readme")
 , ("github", "https://github.com/Shou-/Tombot")
 , ("functions", "https://github.com/Shou-/Tombot#functions")
-, ("operators", "https://github.com/Shou-/Tombot#functions")
+, ("operators", "https://github.com/Shou-/Tombot#operators")
 ]

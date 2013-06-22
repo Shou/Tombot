@@ -35,6 +35,7 @@ import Data.Monoid
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+import Debug.Trace
 
 import qualified Language.Haskell.Interpreter as H
 
@@ -53,6 +54,7 @@ import Text.XML.Light
 funcs :: Map Text Func
 funcs = M.fromList [ ("!", ddg)
                    , ("b", ban)
+                   , ("me", me)
                    , (">", echo)
                    , ("<", priv)
                    , ("k", kick)
@@ -295,37 +297,27 @@ echo = return
 -- | Evaluate KawaiiLang.
 eval :: Func
 eval str = do
-    current <- see
-    let configt = currConfigTMVar current
-        server = currServ current
-    funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
-    let edest = currDest current
-        e = flip fmap edest $ \chan -> do
-            let parser = botparser (stChanPrefix chan) (M.keys funcs)
-                mkl = A.maybeResult . flip A.feed "" $ A.parse parser str
-                me = flip fmap mkl $ compile funcs
-            maybe (return "") id me
-    either (mvoid . warn) id e
+    funcs <- stConfFuncs <$> readConfig
+    botparse funcs str >>= compile funcs
 
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = mwhenUserStat (>= Admin) $ do
-    edest <- sees $ currDest
-    funcs <- fmap stConfFuncs readConfig
-    let e = flip fmap edest $ \chan -> do
-        kill name
-        tid <- forkMi $ whileAlive $ do
-            let parser = botparser (stChanPrefix chan) (M.keys funcs)
-                mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
-                mt = flip fmap mkl $ compile funcs
-            maybe (void $ kill name) (>>= putPrivmsg (stChanName chan)) mt
-        sets $ \c -> c {
-            currServ = (currServ c) {
-                stServThreads = let tds = stServThreads $ currServ c
-                                in M.insert name tid tds
-                                    }
-                       }
-    either warn id e
+    d <- either userNick stChanName . currDest <$> see
+    kill name
+    tid <- forkMi $ whileAlive $ do
+        funcs <- stConfFuncs <$> readConfig
+        kl <- botparse funcs t
+        when (kl == mempty) $ void $ kill name
+        t <- compile funcs kl
+        putPrivmsg d t
+    sets $ \c ->
+        c { currServ =
+            (currServ c) { stServThreads =
+                let tds = stServThreads $ currServ c
+                in M.insert name tid tds
+                         }
+          }
     return ""
   where
     (name, t) = bisect (== ' ') str
@@ -437,10 +429,10 @@ list str = do
             insert = case mv of
                 Just (Whitelist xs)
                     | "funcs" `elem` xs -> const $ Whitelist xs
-                    | otherwise -> const $ Whitelist $ "set" : xs
+                    | otherwise -> const $ Whitelist $ "funcs" : xs
                 Just (Blacklist xs)
                     | "funcs" `notElem` xs -> const $ Blacklist xs
-                    | otherwise -> const $ Blacklist $ filter (/= "set") xs
+                    | otherwise -> const $ Blacklist $ filter (/= "funcs") xs
                 Nothing -> id
         e <- modChanFuncs dest $ insert
         return $ either id (const "") e
@@ -477,8 +469,10 @@ greet str = do
 help :: Func
 help str = do
     dir <- fmap stConfDir readConfig
-    helps <- readConf $ dir <> "help"
-    let mhelp = join $ M.lookup string <$> helps
+    mhelps <- readConf $ dir <> "help"
+    mfuncs <- readLocalStored "letfuncs"
+    let mboth = liftM2 M.union mhelps mfuncs
+    let mhelp = join $ M.lookup string <$> mboth
     return $ maybe "" id mhelp
   where
     string = if T.null $ T.strip str
@@ -580,6 +574,10 @@ match str = do
         let regex = mkRegexWithOpts mat False ins
         emins <- try $ return $! matchRegex regex str'
         either (const $ return "") (return . maybe "" (const "True")) emins
+
+-- | Make the bot do an action; also known as /me.
+me :: Func
+me str = return $ ctcp $ "ACTION " <> str
 
 -- | Set the channel mode.
 mode :: Func
@@ -783,16 +781,16 @@ store str = mwhenPrivileged $ do
     dir <- fmap stConfDir readConfig
     funcs <- stConfFuncs <$> readConfig
     let f = eval . (func <>)
-    mapConfig $ \c ->
-        let funcs = stConfFuncs c
-            funcs' = if M.member name funcs
-                     then funcs
-                     else M.insert name f funcs
-        in c { stConfFuncs = funcs' }
-    mvoid . modLocalStored "letfuncs" $ \letfuncs ->
-        if M.member name funcs
-        then letfuncs
-        else M.insert name func letfuncs
+    isFunc <- M.member name . stConfFuncs <$> readConfig
+    let reader :: Mind (Maybe (Map Text Text))
+        reader = readLocalStored "letfuncs"
+    isStored <- M.member name . maybe mempty id <$> reader
+    let inserter f = if T.null $ T.strip func
+                     then M.delete name
+                     else M.insert name f
+    mvoid . when (isStored || not isFunc) $ do
+        mapConfig $ \c -> c { stConfFuncs = inserter f $ stConfFuncs c }
+        mvoid $ modLocalStored "letfuncs" $ inserter func
   where
     (name, func) = first T.toLower $ bisect (== ' ') str
 
@@ -871,7 +869,6 @@ translate str = do
                              , "&sl=" <> sl <> "&tl=" <> tl <> "&q=" <> x
                              ]
     jsonStr <- httpGetString $ url "auto" tl $ urlEncode string
-    verb jsonStr
     let m = A.maybeResult . flip A.feed "" $ A.parse parser $ T.pack jsonStr
     unless (isJust m) $ warn "translate: Parsing failed."
     return . T.concat $ maybe [] id m
@@ -898,12 +895,10 @@ translate str = do
         A.char ']'
         return tr
     pstring = do
-        let a = A.string "\"\""
-        let b = do
-            t <- T.pack <$> inside '"'
-            A.char '"'
-            return t
-        a <|> b
+        A.char '"'
+        t <- T.pack <$> inside '"'
+        A.char '"'
+        return t
 
 -- | Urban dictionary lookup function.
 urbandict :: Func

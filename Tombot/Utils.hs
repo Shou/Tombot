@@ -60,7 +60,7 @@ manyTillKeep p end = scan ([], [])
 
 -- | Parse something in between two `Char's. Does not consume the last `Char'.
 inside :: Char -> Parser String
-inside x = A.many1 $ escesc <|> escape x <|> A.notChar x
+inside x = A.many' $ escesc <|> escape x <|> A.notChar x
   where
     escesc = A.char '\\' >> A.char '\\'
     escape x = A.char '\\' >> A.char x
@@ -101,7 +101,7 @@ defStChan = StChannel { stChanName = ""
                       , stChanAutoJoin = False
                       , stChanMode = ""
                       , stChanPrefix = ":"
-                      , stChanFuncs = Whitelist []
+                      , stChanFuncs = Whitelist ["funcs"]
                       }
 
 defStServ = StServer { stServHost = mempty
@@ -326,7 +326,6 @@ modLocalStored path f = do
         storeds = maybe (f mempty) f mstoreds
         chans = maybe (M.singleton dest storeds) (M.insert dest storeds) mchans
         servers = maybe (M.singleton serv chans) (M.insert serv chans) mservers
-    verb mstoreds >> verb storeds
     e <- writeConf (dir <> path) servers
     either warn return e
 

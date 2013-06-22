@@ -43,19 +43,12 @@ import System.IO
 --      - About
 --      - Del
 --      - .r or .reload for reloading modules.
--- - Logging
---      - Now just review it.
--- - Privilege system
---      - In progress
---          - Just need to review the functions
 -- - Rejoin on Handle error
 --      - Search for hPutStr and the likes
 --      - Close Handles on reconnection.
 --          - Make sure no Handle errors/reconnects are mistaken, such as the
 --            reconnect loop one because two Eithers were joined.
 -- - Add quit and part messages to config data
--- - UTF-8 encoding
---      - Now just review this.
 -- - Personality/mood
 -- - Run anything the bot writes through the parser. Or at least user commands.
 --      - This means changes are made when the bot does something, such as NICK
@@ -64,21 +57,12 @@ import System.IO
 --      - Make a function that can only write 480 bytes of text to a Handle.
 --      - Only n messages per m seconds.
 --          - 5 messages per 3 seconds, drop everything after.
--- - Keep track of UserStat
---      - Now just review this.
 -- - Save lines to a file.
 --      - This will allow users to do something like:
 --        :on /abc(d)/ :load file -> ra
 --          - This also means we have to replace the matches (\1, \2, ...)
 --            AFTER, not before, we've compiled the kawaiilang.
 --      - How to delete?
--- - Separate `help' file for functions defined by `:let'
---      - Local to channel
---      - Save it in same file as the funcs, "letfuncs"
--- - Separate `funcs' list for user defined functions.
---      - Write the `funcs' to a file "letfuncs" and then if it exists there,
---        the function is user defined. This is local to the channel.
---      - Local to channel
 -- - Deprecate the Config import, instead opting for plaintext and/or command
 --   line arguments and shape Config from that.
 -- - Kanji lookup function
@@ -91,8 +75,18 @@ import System.IO
 --            dangerous funcs either; specifically network ones.
 -- - Load UserStat from file.
 --      - Now we just need to be able to set it somewhere.
--- - Make a function `kawaiiparse' that lessens the amount of code; we've copy-
---   pasted the same KawaiiLang compiling code all over the place.
+-- - Make a function `adapt' that takes a nick and a channel and does its magic
+--      - Just be careful not to use the wrong adapt somewhere, like on KICK or
+--        QUIT
+-- - We are working on adding default channel data on JOIN. Do it on JOIN.
+--      - If we do it on INVITE and :join we end up with BLOAT.
+
+-- REVIEW
+-- - Keep track of UserStat
+-- - UTF-8 encoding
+-- - Logging
+-- - Privilege system
+--      - Review the functions
 
 
 main :: IO ()

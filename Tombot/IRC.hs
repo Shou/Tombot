@@ -108,23 +108,17 @@ joinUserlist (Join nick name host chan) = do
         user = fromJust $ mu' <|> Just (User nick name host stat chans)
     modUserlist $ M.insert nick user
 
--- TODO limit to one message?
 -- | Remind the user with the user's message.
 remind :: IRC -> Mind ()
 remind (Join nick name host d) = do
     mrems <- readLocalStored "remind"
-    let rem = maybe "" id $ M.lookup nick $ maybe mempty id mrems
+    let rem = maybe "" id . join $ M.lookup nick <$> mrems
     server <- sees currServ
     funcs <- stConfFuncs <$> readConfig
-    let echan = note ("No channel: " <> d) $ M.lookup d $ stServChans server
-        e = flip fmap echan $ \chan -> do
-        let parser = botparser (stChanPrefix chan) (M.keys funcs)
-            mkl = A.maybeResult . flip A.feed "" $ A.parse parser rem
-            me = flip fmap mkl $ \kl -> void . forkMi $ do
-                t <- compile funcs kl
-                putPrivmsg d $ nick <> ": " <> t
-        maybe (return ()) id me
-    either warn id e
+    void . forkMi $ do
+        kl <- botparse funcs rem
+        t <- if kl == mempty then return rem else compile funcs kl
+        putPrivmsg d $ nick <> ": " <> t
 
 -- |
 greet :: IRC -> Mind ()
@@ -381,19 +375,14 @@ ctcpVersion irc = do
 -- |
 runLang :: IRC -> Mind ()
 runLang (Privmsg nick name host d t) = do
-    current <- see
-    let server = currServ current
-        configt = currConfigTMVar current
-    funcs <- fmap stConfFuncs $ liftIO $ atomically $ readTMVar configt
-    let echan = note ("No channel: " <> d) $ M.lookup d $ stServChans server
-        e = flip fmap echan $ \chan -> do
-        let parser = botparser (stChanPrefix chan) (M.keys funcs)
-            mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
-            me = flip fmap mkl $ \kl -> void . forkMi $ do
-                t <- compile funcs kl
-                putPrivmsg d t
-        maybe (return ()) id me
-    either warn id e
+    funcs <- stConfFuncs <$> readConfig
+    mlfuncs <- readLocalStored "letfuncs"
+    let meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
+        allfuncs =
+            if isJust meval
+            then M.union funcs $ maybe mempty (M.map $ fromJust meval) mlfuncs
+            else funcs
+    botparse allfuncs t >>= compile allfuncs >>= putPrivmsg d
 
 -- |
 printTell :: IRC -> Mind ()
