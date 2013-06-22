@@ -88,6 +88,8 @@ Search for manga releases and optionally choose how many results to print.<br>
 Syntax: `ma [<number>] [<string>]`
 Example: `:ma 5 banana no nana`
 
+* `me`
+
 * `on`
 Run some function(s) on match.<br>
 Syntax: `on <regex> <kawaiilang>`

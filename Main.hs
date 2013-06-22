@@ -80,6 +80,7 @@ import System.IO
 --        QUIT
 -- - We are working on adding default channel data on JOIN. Do it on JOIN.
 --      - If we do it on INVITE and :join we end up with BLOAT.
+-- - Empty reminders are printed.
 
 -- REVIEW
 -- - Keep track of UserStat

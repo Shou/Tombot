@@ -118,7 +118,7 @@ remind (Join nick name host d) = do
     void . forkMi $ do
         kl <- botparse funcs rem
         t <- if kl == mempty then return rem else compile funcs kl
-        putPrivmsg d $ nick <> ": " <> t
+        unless (T.null t) $ putPrivmsg d $ nick <> ": " <> t
 
 -- |
 greet :: IRC -> Mind ()
