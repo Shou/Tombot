@@ -37,6 +37,21 @@ import System.IO
 --        think?
 --      - We can store functions there as well, which is great.
 -- - Look for patterns and repetitions and make generic functions.
+-- - Keeping file descriptors/handles/sockets
+--      - Ok, the basic approach is that fork() (the C call) doesn't close file
+--        descriptors. If you turn all the Handles into System.Posix.Types.Fd
+--        then you can fork a new instance of your program (using new code),
+--        exec the new binary of your program, open up a unix socket in the old
+--        parent and in the newly exec'ed binary, write all the values of the
+--        Fd's to the socket, and then convert the Fd's back into Handles in
+--        your new.
+--        I'm not sure whether it'd be easier to do this in Haskell or a mix of
+--        C and Haskell, but it should be possible like that.
+--        Lots of old school MUDs (Multi User Dungeon, basically text-based
+--        multiplayer RPGS) had "hot copy-over" where they'd run an updated
+--        version of their server by using tricks like these to prevent the
+--        connection from dropping googling for mud and "copy-over" should find
+--        some relevant results.
 
 -- TODO
 -- - Functions
@@ -70,6 +85,9 @@ import System.IO
 -- - Counter function.
 --      - Timeout between uses.
 --      - `counter <string>` ups the counter
+-- - Nick and hostname must match for privileges to be gained.
+--      - Use WHOIS for people in the UserStat file and check against their
+--        host.
 
 -- FIXME
 -- - handle Handle errors and rejoin.

@@ -36,6 +36,7 @@ Executable tombot
         stm,
         text,
         time,
+        unix == 2.5.1.0,
         utf8-string,
         xml
     Main-Is:

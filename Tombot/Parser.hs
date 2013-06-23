@@ -173,7 +173,7 @@ fullCmd fs = do
               else args
     return $ Func c m o
   where
-    lefts = ["eval", "event", "help", "let", "on"]
+    lefts = ["eval", "event", "help", "let", "on", "re"]
 
 -- TODO figure out how ++ keeps spaces but not <- and ->
 --      - The parser strips spaces at the end, that's how. Get rid of that.

@@ -94,10 +94,10 @@ respond line = do
             adaptPriv irc
             ctcpVersion irc
             printTell irc
-            runLang irc
             onMatch irc
             -- XXX uncomment this when KB goes offline
             -- logPriv irc
+            runLang irc
         onInvite irc $ \_ -> do
             adaptInv irc
             joinInv irc

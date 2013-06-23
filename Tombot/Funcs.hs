@@ -41,6 +41,8 @@ import qualified Language.Haskell.Interpreter as H
 
 import Network.HTTP (urlEncode)
 
+import System.Posix.Process (executeFile, exitImmediately)
+import System.Exit (ExitCode(ExitSuccess))
 import System.IO (hClose)
 import System.Random (randomRIO)
 
@@ -114,6 +116,7 @@ funcs = M.fromList [ ("!", ddg)
                    , ("verb", verbosity)
                    , ("reverse", rwords)
                    , ("britify", britify)
+                   , ("restart", restart)
                    , ("connect", connectIRC)
                    ]
 
@@ -691,11 +694,12 @@ reload _ = mwhenUserStat (>= Root) $ do
 remind :: Func
 remind str = do
     cnick <- sees $ userNick . currUser
-    let f = if T.null $ T.strip msg
-            then const Nothing
-            else if nick == cnick
-                 then const $ Just msg
-                 else id
+    let f :: Maybe Text -> Maybe Text
+        f = maybe (Just msg) $ if nick == cnick
+                               then if T.null $ T.strip msg
+                                    then const Nothing
+                                    else const $ Just msg
+                               else Just
     mvoid . modLocalStored "remind" $ M.alter f nick
   where
     (nick, msg) = bisect (== ' ') str
@@ -715,6 +719,16 @@ respond str = mwhenPrivileged $ mwhen (T.length str > 0) $ do
                 then Nothing
                 else Just (ins, string)
         mvoid . modLocalStored "respond" $ M.alter (const f) mat
+
+restart :: Func
+restart _ = mwhenUserStat (== Root) $ do
+    tmvars <- M.elems . stConfServs <$> readConfig
+    forM_ tmvars $ \t ->
+        liftIO (atomically $ readTMVar t) >>= liftIO . hClose . currHandle
+    liftIO $ do
+        executeFile "tombot" True [] Nothing
+        exitImmediately ExitSuccess
+    return ""
 
 -- | Show StateT data.
 reveal :: Func
