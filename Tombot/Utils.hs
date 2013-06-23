@@ -264,6 +264,9 @@ mwhenPrivileged = mwhenStat (either isMod (>= Admin))
 mwhenUserStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
 mwhenUserStat p = mwhenStat (either (const False) p)
 
+unlessBanned :: Mind () -> Mind ()
+unlessBanned m = whenStat (either (const False) (/= Banned)) m
+
 -- }}}
 
 -- {{{ Decide utils
@@ -453,6 +456,32 @@ pipeJoin (x:y:z:xs) | T.length (x <> y <> z) < 420 =
     in (x', xs)
 pipeJoin (x:y:xs) | T.length (x <> y) < 420 = (Just $ x <> " | " <> y, xs)
                   | otherwise = (Just x, y:xs)
+
+-- }}}
+
+-- {{{ IRC Mind utils
+
+-- | Adapt the Current to the channel.
+adaptWith :: Text -> Text -> Text -> Text
+          -> (User -> (Users -> Users)) -> Mind ()
+adaptWith chan nick name host f = do
+    mchan <- sees $ M.lookup chan . stServChans . currServ
+    users <- sees $ stServUsers . currServ
+    let muser = M.lookup nick users
+        puser = fromJust $ muser <|> Just (User nick name host Online mempty)
+        chans = if isChan chan
+                then M.alter (maybe (Just "") Just) chan $ userChans puser
+                else userChans puser
+        user = puser { userName = name
+                     , userHost = host
+                     , userChans = chans
+                     }
+        dchan = defStChan { stChanName = chan }
+        edest = if isChan chan
+                then Right . fromJust $ mchan <|> Just dchan
+                else Left user
+    sets $ \c -> c { currDest = edest, currUser = user }
+    modUserlist $ f user
 
 -- }}}
 

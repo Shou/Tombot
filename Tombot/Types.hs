@@ -204,6 +204,9 @@ type Decide e a = EitherT e Mind a
 type Funcs = Map Text Func
 type Func = Text -> Mind Text
 
+type Modes = Map Text Mode
+type Users = Map Text User
+
 -- XXX User data?
 --     wat
 -- {{{ IRC

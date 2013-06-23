@@ -414,12 +414,11 @@ count str = return $ T.pack . show $ T.length str
 -- | List the available Funcs.
 list :: Func
 list str = do
+    funcs <- stConfFuncs <$> readConfig
     edest <- sees currDest
     let dest = either userNick stChanName edest
     if T.null $ T.strip str
     then do
-        tmvar <- sees currConfigTMVar
-        funcs <- fmap (stConfFuncs) . liftIO $ atomically $ readTMVar tmvar
         let ea = fmap stChanFuncs edest
             ef = flip fmap ea $ allow (M.keys funcs \\) id
             fs = either (const []) id ef
@@ -434,10 +433,11 @@ list str = do
                     | "funcs" `notElem` xs -> const $ Blacklist xs
                     | otherwise -> const $ Blacklist $ filter (/= "funcs") xs
                 Nothing -> id
+        verb allowedstr
         e <- modChanFuncs dest $ insert
         return $ either id (const "") e
   where
-    allowedstr = let (x, y) = show . T.unpack <$> bisect (== ' ') str
+    allowedstr = let (x, y) = show . words . T.unpack <$> bisect (== ' ') str
                  in unwords [T.unpack x, y]
 
 -- TODO specify server/channel
@@ -657,9 +657,7 @@ random str
         let choices = T.split (== '|') str
             len = length choices
         n <- liftIO $ randomRIO (0, len - 1)
-        if len > 0
-        then return $ choices !! n
-        else return mempty
+        return $ maybe "" id $ choices `atMay` n
   where
     isDigits = T.all (`elem` ['0' .. '9'])
     maybeRead = fmap fst . listToMaybe . reads
@@ -757,7 +755,14 @@ stat str = do
         users <- sees $ stServUsers . currServ
         return $ maybe "" (T.pack . show . userStat) $ M.lookup nick users
     else do
-        mwhenUserStat (> maybe Online id mv) $ do
+        mwhenUserStat (>= Admin) $ do
+            servhost <- stServHost <$> sees currServ
+            dir <- stConfDir <$> readConfig
+            mservs <- readConf $ dir <> "UserStats"
+            let f = maybe (Just . M.delete nick) ((Just .) . M.insert nick) mv
+                mservs' = M.alter (join . fmap f) servhost <$> mservs
+                servs = maybe mempty id mservs'
+            writeConf (dir <> "UserStats") servs
             e <- modUser nick $ \u ->
                 let stat = userStat u
                 in u { userStat = maybe stat id mv }
@@ -906,18 +911,21 @@ urbandict str = do
     let burl = "http://api.urbandictionary.com/v0/define?term="
     jsonStr <- httpGetString (burl ++ T.unpack str)
     let result = decode jsonStr :: Result (JSObject JSValue)
-        text = (\(Ok x) -> x) $ fromJSString
-                              . (\(JSString x) -> x)
-                              . fromJust
-                              . lookup "definition"
-                              . fromJSObject
-                              . (\(JSObject x) -> x )
-                              . (!! 0) . (\(JSArray xs) -> xs)
-                              . fromJust
-                              . lookup "list"
-                              . fromJSObject
-                              <$> result
+    etext <- try $ return $! (\(Ok x) -> x) $ fromJSString
+        . (\(JSString x) -> x)
+        . fromJust
+        . lookup "definition"
+        . fromJSObject
+        . (\(JSObject x) -> x )
+        . (!! 0) . (\(JSArray xs) -> xs)
+        . fromJust
+        . lookup "list"
+        . fromJSObject
+        <$> result
+    text <- either warnShow return etext
     return $ str <> ": " <> T.replace "\n" " " (T.pack text)
+  where
+    warnShow x = warn x >> return ""
 
 -- | Print the channel's userlist.
 userlist :: Func

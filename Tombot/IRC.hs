@@ -92,25 +92,9 @@ onKick _ _ = right ()
 
 -- {{{ Join
 
--- |
-joinUserlist :: IRC -> Mind ()
-joinUserlist (Join nick name host chan) = do
-    server <- sees currServ
-    dir <- stConfDir <$> readConfig
-    let servhost = stServHost server
-    musers <- join . fmap (M.lookup servhost) <$> readConf (dir <> "UserStats")
-    let users = stServUsers server
-        mu = mapChans (M.insert chan "") <$> M.lookup nick users
-        chans = M.fromList [(chan, "")]
-        susers = maybe mempty id musers
-        stat = maybe Online id $ M.lookup nick susers
-        mu' = flip fmap mu $ \u -> u { userStat = stat }
-        user = fromJust $ mu' <|> Just (User nick name host stat chans)
-    modUserlist $ M.insert nick user
-
 -- | Remind the user with the user's message.
 remind :: IRC -> Mind ()
-remind (Join nick name host d) = do
+remind (Join nick name host d) = unlessBanned $ do
     mrems <- readLocalStored "remind"
     let rem = maybe "" id . join $ M.lookup nick <$> mrems
     server <- sees currServ
@@ -129,27 +113,21 @@ greet (Join nick name host chan) = void . forkMi $ do
 -- |
 adaptJoin :: IRC -> Mind ()
 adaptJoin (Join nick name host chan) = do
-    current <- see
-    server <- sees currServ
-    mc <- sees $ M.lookup chan . stServChans . currServ
-    users <- sees $ stServUsers . currServ
-    let mu = M.lookup nick users
-        puser = fromJust $ mu <|> Just (User nick name host Online mempty)
-        chans = if isChan chan
-                then M.alter (maybe (Just "") Just) chan $ userChans puser
-                else userChans puser
-        user = puser { userName = name
-                     , userHost = host
-                     , userChans = chans
-                     }
-        edest = if isChan chan
-                then Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
-                else Left user
-        current' = current { currDest = edest
-                           , currUser = user
-                           }
-    set current'
-    modUserlist $ M.insert nick user
+    servhost <- stServHost <$> sees currServ
+    dir <- stConfDir <$> readConfig
+    musers <- join . fmap (M.lookup servhost) <$> readConf (dir <> "UserStats")
+    let muser = join $ M.lookup nick <$> musers
+        stat = maybe Online id muser
+    adaptWith chan nick name host $ \u ->
+        M.insert nick $ u { userStat = stat }
+
+-- | Add a channel if it doesn't exist.
+addJoin :: IRC -> Mind ()
+addJoin (Join nick name host chan) = do
+    chans <- stServChans <$> sees currServ
+    unless (M.member chan chans) $ do
+        let chans' = M.insert chan (defStChan { stChanName = chan }) chans
+        sets $ \c -> c { currServ = (currServ c) { stServChans = chans' }}
 
 -- }}}
 
@@ -160,25 +138,8 @@ adaptJoin (Join nick name host chan) = do
 -- | Adapt the current from the Kick information.
 adaptKick :: IRC -> Mind ()
 adaptKick (Kick nick name host chan nicks text) = do
-    current <- see
-    server <- sees currServ
-    mc <- sees $ M.lookup chan . stServChans . currServ
-    users <- sees $ stServUsers . currServ
-    let mu = M.lookup nick users
-        puser = fromJust $ mu <|> Just (User nick name host Online mempty)
-        chans = if isChan chan
-                then M.alter (maybe (Just "") Just) chan $ userChans puser
-                else userChans puser
-        user = puser { userName = name
-                     , userHost = host
-                     , userChans = chans
-                     }
-        edest = Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
-        current' = current { currDest = edest
-                           , currUser = user
-                           }
-    set current'
-    modUserlist $ M.insert nick user
+    adaptWith chan nicks "" "" $ \u ->
+        M.insert nicks $ u { userChans = M.delete chan (userChans u) }
 
 -- | When the bot is kicked, rejoin if `chanAutoJoin' is `True'.
 botKick :: IRC -> Mind ()
@@ -192,17 +153,6 @@ botKick (Kick nick name host chans nicks text) = do
   where
     noChan = ("Not a channel, " <>)
 
--- | Remove a user's channel on kick.
-userlistKick :: IRC -> Mind ()
-userlistKick (Kick nick name host chans nicks text) = do
-    modUserlist stChanDel
-  where
-    stChanDel users =
-        let mu = mapChans (M.delete chans) <$> M.lookup nicks users
-            cs = M.empty
-            us = fromJust $ mu <|> Just (User nicks name host Online cs)
-        in M.insert nick us users
-
 -- }}}
 
 -- {{{ Mode
@@ -211,25 +161,7 @@ userlistKick (Kick nick name host chans nicks text) = do
 -- |
 adaptMode :: IRC -> Mind ()
 adaptMode (Mode nick name host chan _ _) = do
-    current <- see
-    server <- sees currServ
-    mc <- sees $ M.lookup chan . stServChans . currServ
-    users <- sees $ stServUsers . currServ
-    let mu = M.lookup nick users
-        puser = fromJust $ mu <|> Just (User nick name host Online mempty)
-        chans = if isChan chan
-                then M.alter (maybe (Just "") Just) chan $ userChans puser
-                else userChans puser
-        user = puser { userName = name
-                     , userHost = host
-                     , userChans = chans
-                     }
-        edest = Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
-        current' = current { currDest = edest
-                           , currUser = user
-                           }
-    set current'
-    modUserlist $ M.insert nick user
+    adaptWith chan nick name host $ M.insert nick
 
 -- TODO move `minus' and `plus' to Utils.
 -- |
@@ -282,56 +214,18 @@ changeMode (Mode nick name host chan chars mtext) =
 
 nickUserlist :: IRC -> Mind ()
 nickUserlist (Nick nick name host text) = do
-    server <- sees currServ
-    dir <- stConfDir <$> readConfig
-    let servhost = stServHost server
-    musers <- join . fmap (M.lookup servhost) <$> readConf (dir <> "UserStats")
-    let users = stServUsers server
-        mu = M.lookup nick users
-        susers = maybe mempty id musers
-        stat = maybe Online id $ M.lookup text susers
-        mu' = flip fmap mu $ \u -> u { userNick = text, userStat = stat }
-        user = fromJust $ mu' <|> Just (User text name host stat mempty)
-    modUserlist $ M.insert text user . M.delete nick
+    adaptWith "" nick name host $ \u ->
+        M.insert text (u { userNick = text }) . M.delete nick
 
 -- }}}
 
 -- {{{ Part
 
-partUserlist :: IRC -> Mind ()
-partUserlist (Part nick name host chan text) = do
-    modUserlist stChanDel
-  where
-    stChanDel users =
-        let mu = mapChans (M.delete chan) <$> M.lookup nick users
-            cs = M.empty
-            us = fromJust $ mu <|> Just (User nick name host Online cs)
-        in M.insert nick us users
-
 -- |
 adaptPart :: IRC -> Mind ()
 adaptPart (Part nick name host chan _) = do
-    current <- see
-    server <- sees currServ
-    mc <- sees $ M.lookup chan . stServChans . currServ
-    users <- sees $ stServUsers . currServ
-    let mu = M.lookup nick users
-        puser = fromJust $ mu <|> Just (User nick name host Online mempty)
-        chans = if isChan chan
-                then M.alter (maybe (Just "") Just) chan $ userChans puser
-                else userChans puser
-        user = puser { userName = name
-                     , userHost = host
-                     , userChans = chans
-                     }
-        edest = if isChan chan
-                then Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
-                else Left user
-        current' = current { currDest = edest
-                           , currUser = user
-                           }
-    set current'
-    modUserlist $ M.insert nick user
+    adaptWith chan nick name host $ \u ->
+        M.insert nick $ u { userChans = M.delete chan (userChans u) }
 
 -- }}}
 
@@ -340,27 +234,7 @@ adaptPart (Part nick name host chan _) = do
 -- |
 adaptPriv :: IRC -> Mind ()
 adaptPriv (Privmsg nick name host d _) = do
-    current <- see
-    server <- sees currServ
-    mc <- sees $ M.lookup d . stServChans . currServ
-    users <- sees $ stServUsers . currServ
-    let mu = M.lookup nick users
-        puser = fromJust $ mu <|> Just (User nick name host Online mempty)
-        chans = if isChan d
-                then M.alter (maybe (Just "") Just) d $ userChans puser
-                else userChans puser
-        user = puser { userName = name
-                     , userHost = host
-                     , userChans = chans
-                     }
-        edest = if isChan d
-                then Right . fromJust $ mc <|> Just (defStChan { stChanName = d })
-                else Left user
-        current' = current { currDest = edest
-                           , currUser = user
-                           }
-    set current'
-    modUserlist $ M.insert nick user
+    adaptWith d nick name host $ M.insert nick
 
 -- | Respond to CTCP VERSION.
 ctcpVersion :: IRC -> Mind ()
@@ -374,7 +248,7 @@ ctcpVersion irc = do
 -- TODO lookup user defined functions
 -- |
 runLang :: IRC -> Mind ()
-runLang (Privmsg nick name host d t) = do
+runLang (Privmsg nick name host d t) = unlessBanned $ do
     funcs <- stConfFuncs <$> readConfig
     mlfuncs <- readLocalStored "letfuncs"
     let meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
@@ -386,7 +260,7 @@ runLang (Privmsg nick name host d t) = do
 
 -- |
 printTell :: IRC -> Mind ()
-printTell (Privmsg nick _ _ dest text) = do
+printTell (Privmsg nick _ _ dest text) = unlessBanned $ do
     serv <- sees $ stServHost . currServ
     tmvar <- sees currConfigTMVar
     dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
@@ -401,7 +275,7 @@ printTell (Privmsg nick _ _ dest text) = do
 
 -- |
 onMatch :: IRC -> Mind ()
-onMatch irc@(Privmsg nick name host dest text) = do
+onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
     dir <- fmap stConfDir readConfig
     mons <- readLocalStored $ "respond"
     let ons = maybe mempty M.toList mons
@@ -436,11 +310,7 @@ logPriv (Privmsg nick name host dest text) = do
 -- {{{ Quit
 
 quitUserlist (Quit nick name host text) = do
-    modUserlist userOff
-  where
-    userOff users =
-        let mu = mapStat (const Offline) <$> M.lookup nick users
-        in maybe users (\u -> M.insert nick u users) mu
+    adaptWith "" nick name host $ \u -> M.insert nick $ u { userStat = Offline }
 
 -- }}}
 
@@ -464,29 +334,11 @@ addTopic (Topic nick name host chan text) = do
 -- | Adapt the current from the Invite information.
 adaptInv :: IRC -> Mind ()
 adaptInv (Invite nick name host dest chan) = do
-    current <- see
-    server <- sees currServ
-    mc <- sees $ M.lookup chan . stServChans . currServ
-    users <- sees $ stServUsers . currServ
-    let mu = M.lookup nick users
-        puser = fromJust $ mu <|> Just (User nick name host Online mempty)
-        chans = if isChan chan
-                then M.alter (maybe (Just "") Just) chan $ userChans puser
-                else userChans puser
-        user = puser { userName = name
-                     , userHost = host
-                     , userChans = chans
-                     }
-        edest = Right . fromJust $ mc <|> Just (defStChan { stChanName = chan })
-        current' = current { currDest = edest
-                           , currUser = user
-                           }
-    set current'
-    modUserlist $ M.insert nick user
+    adaptWith chan nick name host $ M.insert nick
 
 -- | Join on invite.
 joinInv :: IRC -> Mind ()
-joinInv (Invite nick name host dest chan) = do
+joinInv (Invite nick name host dest chan) = unlessBanned $ do
     edest <- sees currDest
     let e = flip fmap edest $ \c -> do
         mwhen (stChanJoin c) $ write $ "JOIN " <> chan
@@ -600,7 +452,7 @@ modeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
 
 privilegeNum :: IRC -> Mind ()
 privilegeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
-    write $ "PRIVMSG " <> a <> " :" <> "C-check my privileges, p-please!"
+    write $ "PRIVMSG " <> a <> " :" <> "Ch-check my privileges, p-please!"
   where
     noArgs = "No `numArgs' in Numeric " <> n
 

@@ -83,11 +83,10 @@ respond line = do
             quitUserlist irc
         onJoin irc $ \_ -> do
             adaptJoin irc
-            joinUserlist irc
+            addJoin irc
             remind irc
         onPart irc $ \_ -> do
             adaptPart irc
-            partUserlist irc
         onTopic irc $ \(Topic nick name host c t) -> do
             void $ modChanTopic c $ const t
         onPing irc $ \(Ping t) -> write $ "PONG :" <> t
@@ -105,7 +104,6 @@ respond line = do
         onKick irc $ \_ -> do
             adaptKick irc
             botKick irc
-            userlistKick irc
         onNumeric "311" irc $ \_ -> do
             whoisNum irc
         onNumeric "324" irc $ \_ -> do

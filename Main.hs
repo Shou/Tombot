@@ -66,6 +66,10 @@ import System.IO
 -- - Deprecate the Config import, instead opting for plaintext and/or command
 --   line arguments and shape Config from that.
 -- - Kanji lookup function
+-- - Channel white/blacklisting
+-- - Counter function.
+--      - Timeout between uses.
+--      - `counter <string>` ups the counter
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -78,9 +82,10 @@ import System.IO
 -- - Make a function `adapt' that takes a nick and a channel and does its magic
 --      - Just be careful not to use the wrong adapt somewhere, like on KICK or
 --        QUIT
--- - We are working on adding default channel data on JOIN. Do it on JOIN.
---      - If we do it on INVITE and :join we end up with BLOAT.
--- - Empty reminders are printed.
+-- - Taken NICK isn't working properly.
+-- - Empty channel name might be inserted on NICK or QUIT.
+-- - User status will be Online if the User PARTs from all channels the bot is
+--   in and then quitting.
 
 -- REVIEW
 -- - Keep track of UserStat
