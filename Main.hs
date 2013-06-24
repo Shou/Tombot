@@ -88,6 +88,8 @@ import System.IO
 -- - Nick and hostname must match for privileges to be gained.
 --      - Use WHOIS for people in the UserStat file and check against their
 --        host.
+-- - WolframAlpha
+-- - wwwjdic
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -104,10 +106,11 @@ import System.IO
 -- - Empty channel name might be inserted on NICK or QUIT.
 -- - User status will be Online if the User PARTs from all channels the bot is
 --   in and then quitting.
+-- - Reverse pipe is not working because of bug in `compile'.
+--      - Rewrite it and use StateT
 
 -- REVIEW
 -- - Keep track of UserStat
--- - UTF-8 encoding
 -- - Logging
 -- - Privilege system
 --      - Review the functions

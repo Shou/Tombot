@@ -97,7 +97,7 @@ respond line = do
             void . forkMi $ onMatch irc
             runLang irc
             -- XXX uncomment this when KB goes offline
-            -- logPriv irc
+            logPriv irc
         onInvite irc $ \_ -> do
             adaptInv irc
             joinInv irc
