@@ -189,6 +189,10 @@ Display or change the channel's function list. `op`<br>
 
 * `greet`
 
+* `kanji`
+Display the definitions of a kanji.<br>
+`kanji <string>` `:kanji 氷`
+
 * `nicks`
 Display or change the bot's list of nick it uses on connect. `op`<br>
 `nicks <string> ...` `:nicks Tomboy Otenba`
@@ -215,9 +219,16 @@ Display or change the channel's ChanAutoJoin value. `op`<br>
 Display or change the bot's KawaiiLang prefix characters. `op`<br>
 `prefix [<char> ...]` `prefix .:!`
 
+* `romaji`
+Convert Japanese syllabaries to Romaji.<br>
+`romaji <string>` `:romaji あなたを食べたい`
+
 * `britify`
 
 * `connect`
+
+* `restart`
+Restart the bot's process. `root`
 
 * `reverse`
 Print the words in reverse order.<br>

@@ -99,19 +99,21 @@ funcs = M.fromList [ ("!", ddg)
                    , ("cjoin", cjoin)
                    , ("event", event)
                    , ("greet", greet)
+                   , ("kanji", kanji)
                    , ("nicks", nicks)
                    , ("sleep", sleep)
                    , ("title", title)
                    , ("topic", topic)
                    , ("show", reveal)
-                   , ("tr", translate)
                    , ("us", userlist)
+                   , ("tr", translate)
                    , ("cajoin", cajoin)
                    , ("cutify", cutify)
                    , ("join", chanjoin)
                    , ("part", partchan)
                    , ("prefix", prefix)
                    , ("reload", reload)
+                   , ("romaji", romaji)
                    , ("urb", urbandict)
                    , ("verb", verbosity)
                    , ("reverse", rwords)
@@ -350,13 +352,15 @@ gay str = return $ colorize 0 mempty str' <> "\ETX"
                           acc' = acc <> color <> char'
                           t' = T.tail t
                       in colorize n' acc' t'
-    colors = ["\ETX,04", "\ETX,07", "\ETX,08", "\ETX,03", "\ETX,02", "\ETX,06"]
+    c = ("\ETX00," <>)
+    colors = [c "04", c "07", c "08", c "03", c "02", c "06"]
 
--- XXX reuse the translate code, except put it in a generalised function
 -- | Kanji lookup function.
 kanji :: Func
 kanji str = do
-    return ""
+    m <- gtranslate "ja" "en" $ T.unpack str
+    let mdefs = fmap (T.intercalate ", ") . snd <$> m
+    return $ maybe "" (\(a, b) -> a <> ": " <> b) mdefs
 
 -- | Kick a user.
 kick :: Func
@@ -723,8 +727,9 @@ respond str = mwhenPrivileged $ mwhen (T.length str > 0) $ do
 restart :: Func
 restart _ = mwhenUserStat (== Root) $ do
     tmvars <- M.elems . stConfServs <$> readConfig
-    forM_ tmvars $ \t ->
-        liftIO (atomically $ readTMVar t) >>= liftIO . hClose . currHandle
+    forM_ tmvars $ \t -> do
+        c <- liftIO (atomically $ readTMVar t)
+        liftIO . try . hClose $ currHandle c
     liftIO $ do
         executeFile "tombot" True [] Nothing
         exitImmediately ExitSuccess
@@ -743,6 +748,13 @@ reveal str = do
         _ -> return ""
   where
     double = first T.strip . second T.strip $ bisect (== ' ') str
+
+-- | Kana/kanji to romaji function
+romaji :: Func
+romaji str = do
+    m <- gtranslate "ja" "en" $ T.unpack str
+    let mtrans = (map $ maybeToMonoid . flip atMay 3) . fst <$> m
+    return . T.unwords $ maybe [] id mtrans
 
 -- | Reverse word order.
 rwords :: Func
@@ -874,50 +886,16 @@ topic str
             (beg, end) = T.drop len <$> T.breakOn t' ts'
         in T.reverse $ beg <> end
 
--- TODO
 -- | Google translate.
 translate :: Func
 translate str = do
     let (tl', str') = bisect (== ' ') str
         (tl, string) = if T.length tl' == 2 && T.all isLower tl'
-             then (T.unpack tl', T.unpack str')
-             else ("en", T.unpack str)
-        url sl tl x = concat [ "http://translate.google.com"
-                             , "/translate_a/t"
-                             , "?client=t&hl=en"
-                             , "&sl=" <> sl <> "&tl=" <> tl <> "&q=" <> x
-                             ]
-    jsonStr <- httpGetString $ url "auto" tl $ urlEncode string
-    let m = A.maybeResult . flip A.feed "" $ A.parse parser $ T.pack jsonStr
-    unless (isJust m) $ warn "translate: Parsing failed."
-    return . T.concat $ maybe [] id m
-  where
-    parser :: Parser [Text]
-    parser = do
-        A.char '['
-        lists
-    lists = do
-        A.char '['
-        A.many1 $ do
-            tr <- list
-            A.try $ A.char ',' <|> A.char ']'
-            return tr
-    list = do
-        A.char '['
-        tr <- pstring
-        A.char ','
-        pstring
-        A.char ','
-        pstring
-        A.char ','
-        pstring
-        A.char ']'
-        return tr
-    pstring = do
-        A.char '"'
-        t <- T.pack <$> inside '"'
-        A.char '"'
-        return t
+                       then (T.unpack tl', T.unpack str')
+                       else ("en", T.unpack str)
+    m <- gtranslate "auto" tl string
+    let mtrans = (map $ maybeToMonoid . headMay) . fst <$> m
+    return . T.concat $ maybe [] id mtrans
 
 -- | Urban dictionary lookup function.
 urbandict :: Func

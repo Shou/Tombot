@@ -36,6 +36,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
+import Network.HTTP (urlEncode)
 import Network.HTTP.Conduit
 import Network.HTTP.Conduit.Browser
 import Network.HTTP.Types.Status
@@ -65,6 +66,7 @@ inside x = A.many' $ escesc <|> escape x <|> A.notChar x
     escesc = A.char '\\' >> A.char '\\'
     escape x = A.char '\\' >> A.char x
 
+-- | Parse a regex match.
 parsematch :: Parser (String, Bool, String)
 parsematch = do
     x <- A.satisfy (not . isAlphaNum)
@@ -74,6 +76,7 @@ parsematch = do
     text <- T.unpack <$> (A.try A.space >> A.takeText) <|> return ""
     return (mat, ins, text)
 
+-- | Parse a sed regex replace.
 parsesed :: Parser (String, String, Bool, String)
 parsesed = do
     A.char 's'
@@ -85,6 +88,40 @@ parsesed = do
     ins <- fmap (/= 'i') . A.try $ A.char 'i' <|> return 'z'
     text <- T.unpack <$> (A.try A.space >> A.takeText) <|> return ""
     return (mat, rep, ins, text)
+
+-- [[["Idiot","ばか","","Baka"]],[["noun",["stupidity","bonehead","clod"],
+-- | Google translate parser.
+transparser :: Parser ([[Text]], (Text, [Text]))
+transparser = A.char '[' >> lists
+  where
+    lists :: Parser ([[Text]], (Text, [Text]))
+    lists = do
+        A.char '['
+        trans <- A.many' $ do
+            tr <- list
+            A.char ',' <|> A.char ']'
+            return tr
+        A.char ','
+        defin <- def <|> return ("", [])
+        return (trans, defin)
+    def = do
+        A.string "[["
+        t <- pstring
+        A.char ','
+        means <- list
+        return (t, means)
+    list :: Parser [Text]
+    list = do
+        A.char '['
+        A.many' $ do
+            s <- pstring
+            A.try $ A.char ',' <|> A.char ']'
+            return s
+    pstring = do
+        A.char '"'
+        t <- T.pack <$> inside '"'
+        A.char '"'
+        return t
 
 -- }}}
 
@@ -403,6 +440,20 @@ httpGetString url = liftIO $ withManager $ \man -> do
     htitle = "User-Agent"
     useragent = "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
 
+-- | Google translate
+gtranslate :: MonadIO m => String -> String -> String
+           -> m (Maybe ([[Text]], (Text, [Text])))
+gtranslate sl tl q = do
+    let url = concat [ "http://translate.google.com"
+                     , "/translate_a/t"
+                     , "?client=t&hl=en"
+                     , "&sl=" <> sl <> "&tl=" <> tl <> "&q=" <> urlEncode q
+                     ]
+    jsonStr <- httpGetString $ url
+    let m = A.maybeResult $ A.parse transparser (T.pack jsonStr) `A.feed` ""
+    unless (isJust m) $ warn jsonStr
+    return m
+
 -- }}}
 
 -- {{{ IO utils
@@ -485,6 +536,15 @@ adaptWith chan nick name host f = do
 
 -- }}}
 
+-- {{{ Maybe utils
+
+-- | Maybe to any monoid value.
+maybeToMonoid :: Monoid a => Maybe a -> a
+maybeToMonoid (Just x) = x
+maybeToMonoid Nothing = mempty
+
+-- }}}
+
 -- {{{ Mind utils
 
 -- XXX Do we make functions that use warn and verb, or do we use a verbosity
@@ -561,10 +621,6 @@ joinUntil p str (x:strs) = joinUntil' p x str strs
                                   in if p acc'
                                      then acc
                                      else joinUntil' p acc' str xs
-
--- }}}
-
--- {{{ Parsing utils
 
 -- }}}
 

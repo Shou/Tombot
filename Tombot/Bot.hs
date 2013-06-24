@@ -94,10 +94,10 @@ respond line = do
             adaptPriv irc
             ctcpVersion irc
             printTell irc
-            onMatch irc
+            void . forkMi $ onMatch irc
+            runLang irc
             -- XXX uncomment this when KB goes offline
             -- logPriv irc
-            runLang irc
         onInvite irc $ \_ -> do
             adaptInv irc
             joinInv irc
