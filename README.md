@@ -237,25 +237,32 @@ Print the words in reverse order.<br>
 
 ## Operators
 * `->`
-Pipe, it appends the output of the function on the left into the function on the right.<br> `.> Hi! -> gay`
+Pipe, it appends the output of the function on the left into the function on the right.<br>
+`.> Hi! -> gay `
 
 * `<-`
-The opposite of `->`.<br> `:> This is a cool city: ++ gay <- ra Tokyo|Oslo|Madrid`
+The opposite of `->`.<br>
+`:> This is a cool city: ++ gay <- ra Tokyo|Oslo|Madrid`
 
 * `++`
-Add, it appends the string of the output on the right to the output on the left.<br> `.lewd ++ .lewd`
+Add, it appends the string of the output on the right to the output on the left.<br>
+`.lewd ++ .lewd`
 
 * `>>`
-Execute the first function, disregard the output and continue.<br> `:tell Fogun Did you watch Gargantia yet? >> tell lunar Hi!`
+Execute the first function, disregard the output and continue.<br>
+`:tell Fogun Did you watch Gargantia yet? >> tell lunar Hi!`
 
 * `<>`
-Or; return whatever function's result isn't empty. `Lazy`<br> `:ra You're safe for now| <> b John`
+Or; return whatever function's result isn't empty. `Lazy`<br>
+`:ra You're safe for now| <> b John`
 
 * `><`
-And; return the right function's output only if both functions return something. `Lazy`<br> `:ra You're dead, kid!| >< b John`
+And; return the right function's output only if both functions return something. `Lazy`<br>
+`:ra You're dead, kid!| >< b John`
 
 * `+>`
-And append; return both functions' outputs appended only if both return something. `Lazy`<br> `:`
+And append; return both functions' outputs appended only if both return something. `Lazy`<br>
+`:on /(https?://\S+)/i :> Title: +> title \1`
 
 ## Function config files
 
