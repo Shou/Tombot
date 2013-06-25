@@ -279,20 +279,24 @@ onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
     dir <- fmap stConfDir readConfig
     mons <- readLocalStored $ "respond"
     let ons = maybe mempty M.toList mons
-    forM_ ons $ \(match, (ins, resp)) -> do
+    void . decide $ forM_ ons $ \(match, (ins, resp)) -> deci . decide $ do
         let regex = mkRegexWithOpts match False ins
         emins <- try $ return $! matchRegex regex $ T.unpack text
-        let e = flip fmap emins $ \mins -> do
-            let m = flip fmap mins $ \ins -> do
-                -- FIXME who needs indexes larger than 9 anyway?!?!
-                let indexes = [ '\\' : show x | x <- [0 .. 9]]
-                    replacer = zipWith replace indexes (T.unpack text : ins)
-                    resp' = foldr ($) resp replacer
-                runLang $ irc { privText = T.pack resp' }
-            maybe (return ()) id m
-        either warn id e
+        when (isLeft emins) $ do
+            verb ("onMatch: " <> show emins)
+            left ()
+        let mins = either (const $ Just []) id emins
+        unless (isJust mins) $ left ()
+        let ins = fromJust mins
+            -- FIXME who needs indexes larger than 9 anyway?!?!
+            indexes = [ '\\' : show x | x <- [0 .. 9]]
+            replacer = zipWith replace indexes (T.unpack text : ins)
+            resp' = foldr ($) resp replacer
+        lift $ runLang $ irc { privText = T.pack resp' }
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
+    deci :: Mind (Either () ()) -> Decide () ()
+    deci m = lift m >>= either right left
 
 -- |
 logPriv :: IRC -> Mind ()

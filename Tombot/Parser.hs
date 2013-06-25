@@ -43,11 +43,11 @@ data KawaiiLang = Func Text Text KawaiiLang
 instance Monoid KawaiiLang where
     mempty = Kempty
     mappend a b = let f (Func t0 t1 Kempty) = Func t0 t1 b
-                      f (Func t0 t1 kl) = Func t0 t1 (kl `mappend` b)
+                      f (Func t0 t1 kl) = Func t0 t1 (kl <> b)
                       f (Oper t Kempty) = Oper t b
-                      f (Oper t kl) = Oper t (kl `mappend` b)
+                      f (Oper t kl) = Oper t (kl <> b)
                       f (Parens kl0 Kempty) = Parens kl0 b
-                      f (Parens kl0 kl) = Parens kl0 (kl `mappend` b)
+                      f (Parens kl0 kl) = Parens kl0 (kl <> b)
                       f Kempty = b
                   in f a
 
@@ -186,7 +186,7 @@ compile funcs = klToText mempty
     -- Append
     klToText old (Oper "++" kl) = klToText old kl
     -- Pipe
-    klToText old (Oper "->" kl) = klToText mempty $ kmap (`T.append` old) kl
+    klToText old (Oper "->" kl) = klToText mempty $ kmap (<> old) kl
     -- Or
     klToText old (Oper "<>" kl) = do
         if T.null $ T.strip old
@@ -216,12 +216,12 @@ compile funcs = klToText mempty
         -- "Paren-stripper"
         if kwhen hd then do
             t <- klToText mempty tl
-            klToText mempty $ Func name (T.append args t) Kempty
+            klToText mempty $ Func name (args <> t) Kempty
         -- Regular Func
         else do
             flip (maybe $ return mempty) (M.lookup name funcs) $ \f -> do
                 t <- f args
-                klToText (T.append old t) kl
+                klToText (old <> t) kl
       where
         kwhen (Oper "<-" _) = True
         kwhen _ = False

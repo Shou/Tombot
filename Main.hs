@@ -56,7 +56,6 @@ import System.IO
 -- TODO
 -- - Functions
 --      - About
---      - Del
 --      - .r or .reload for reloading modules.
 -- - Rejoin on Handle error
 --      - Search for hPutStr and the likes

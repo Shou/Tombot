@@ -491,7 +491,7 @@ history :: Func
 history str = do
     let (tn, str') = T.break (== ' ') $ T.stripStart str
         mn = readMay $ T.unpack tn :: Maybe Int
-        n = maybe 1 id mn
+        n = maybe 0 id mn
         string = maybe str (const str') mn
         (matches, filters) = wordbreaks ((== '-') . T.head) string
         filters' = map (T.pack . tailSafe . T.unpack) filters
@@ -642,7 +642,7 @@ prefix str = do
         dest <- either userNick stChanName <$> sees currDest
         mchan <- M.lookup dest . stServChans . currServ <$> see
         return $ maybe "" (T.pack . stChanPrefix) mchan
-    else mwhenPrivileged $ do
+    else mwhenPrivileged $ mwhen (T.length str > 0) $ do
         mvoid . modChan dest $ \c -> c { stChanPrefix = T.unpack str }
 
 -- | Send a private message to the user.
@@ -724,6 +724,8 @@ respond str = mwhenPrivileged $ mwhen (T.length str > 0) $ do
                 else Just (ins, string)
         mvoid . modLocalStored "respond" $ M.alter (const f) mat
 
+-- FIXME restarting takes a while, is probably because of STM
+-- | Restart the bot.
 restart :: Func
 restart _ = mwhenUserStat (== Root) $ do
     tmvars <- M.elems . stConfServs <$> readConfig
@@ -848,10 +850,10 @@ title :: Func
 title str = do
     (con, hed, _, _) <- httpGetResponse (T.unpack str)
     let respType = maybe "" id $ lookup "Content-Type" hed
-    mwhen ("text/html" `isInfixOf` respType) $ do
+    mwhen ("text/html" `isInfixOf` map toLower respType) $ do
         let xml = fromMaybeElement $ parseXMLDoc con
             qTitle = QName "title" Nothing Nothing
-            elem = fromMaybeElement $ findElement qTitle xml
+            elem = fromMaybeElement $ findElementAttrs qTitle [] xml
             text = elemsText elem
         return $ T.strip $ T.pack text
 
