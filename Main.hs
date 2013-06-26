@@ -89,6 +89,8 @@ import System.IO
 --        host.
 -- - WolframAlpha
 -- - wwwjdic
+-- - Monoids!!!!
+--      - mFromLeft, mFromRight, mFromJust, ...
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -107,6 +109,8 @@ import System.IO
 --   in and then quitting.
 -- - Reverse pipe is not working because of bug in `compile'.
 --      - Rewrite it and use StateT
+-- - Case insensitive name matching.
+--      - Specifically on tells and reminders.
 
 -- REVIEW
 -- - Keep track of UserStat

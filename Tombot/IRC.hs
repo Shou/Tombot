@@ -25,6 +25,7 @@ import Control.Monad.State
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import qualified Data.CaseInsensitive as CI
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -102,7 +103,7 @@ remind (Join nick name host d) = unlessBanned $ do
     void . forkMi $ do
         kl <- botparse funcs rem
         t <- if kl == mempty then return rem else compile funcs kl
-        unless (T.null t) $ putPrivmsg d $ nick <> ": " <> t
+        unless (T.null t) $ putPrivmsg d $ CI.original nick <> ": " <> t
 
 -- |
 greet :: IRC -> Mind ()
@@ -138,8 +139,9 @@ addJoin (Join nick name host chan) = do
 -- | Adapt the current from the Kick information.
 adaptKick :: IRC -> Mind ()
 adaptKick (Kick nick name host chan nicks text) = do
-    adaptWith chan nicks "" "" $ \u ->
-        M.insert nicks $ u { userChans = M.delete chan (userChans u) }
+    let cinicks = CI.mk nicks
+    adaptWith chan cinicks "" "" $ \u ->
+        M.insert cinicks $ u { userChans = M.delete chan (userChans u) }
 
 -- | When the bot is kicked, rejoin if `chanAutoJoin' is `True'.
 botKick :: IRC -> Mind ()
@@ -149,7 +151,7 @@ botKick (Kick nick name host chans nicks text) = do
     let isNick = maybe False (== nicks) $ atMay botnicks 0
         e = flip fmap edest $ \c -> do
             when (stChanAutoJoin c && isNick) $ write $ "JOIN " <> stChanName c
-    either (warn . noChan . userNick) id e
+    either (warn . noChan . origNick) id e
   where
     noChan = ("Not a channel, " <>)
 
@@ -177,7 +179,7 @@ changeMode (Mode nick name host chan chars mtext) =
     plus ('-':xs) ys = minus xs ys
     plus (x:xs) ys
         | any (== x) usermodes && length ys > 0 = do
-            e <- modUser (ys !! 0) $ \u ->
+            e <- modUser (CI.mk $ ys !! 0) $ \u ->
                 let chans = userChans u
                     f = maybe (Just [x]) (Just . sort . (x :))
                     chans' = M.alter f chan chans
@@ -194,7 +196,7 @@ changeMode (Mode nick name host chan chars mtext) =
     minus ('+':xs) ys = plus xs ys
     minus (x:xs) ys
         | any (== x) usermodes && length ys > 0 = do
-            e <- modUser (ys !! 0) $ \u ->
+            e <- modUser (CI.mk $ ys !! 0) $ \u ->
                 let chans = userChans u
                     f = maybe (Just []) (Just . filter (/= x))
                     chans' = M.alter f chan chans
@@ -214,8 +216,9 @@ changeMode (Mode nick name host chan chars mtext) =
 
 nickUserlist :: IRC -> Mind ()
 nickUserlist (Nick nick name host text) = do
+    let citext = CI.mk text
     adaptWith "" nick name host $ \u ->
-        M.insert text (u { userNick = text }) . M.delete nick
+        M.insert citext (u { userNick = citext }) . M.delete nick
 
 -- }}}
 
@@ -241,7 +244,7 @@ ctcpVersion :: IRC -> Mind ()
 ctcpVersion irc = do
     current <- see
     let t = privText irc
-        c = either userNick stChanName $ currDest current
+        c = either origNick stChanName $ currDest current
         v = "VERSION " <> version
     mwhen (t == "\SOHVERSION\SOH") $ putPrivmsg c $ ctcp v
 
@@ -265,13 +268,14 @@ printTell (Privmsg nick _ _ dest text) = unlessBanned $ do
     tmvar <- sees currConfigTMVar
     dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
     musers <- readLocalStored "tell"
-    let mtexts = join $ M.lookup nick <$> musers
+    let cinick = CI.mk nick
+        mtexts = join $ M.lookup cinick <$> musers
         msgs = maybe [] id mtexts
         (msg, msgs') = pipeJoin msgs
-        users = maybe (M.singleton nick msgs) (M.insert nick msgs') musers
+        users = maybe (M.singleton cinick msgs) (M.insert cinick msgs') musers
     when (isJust msg) $ do
         modLocalStored "tell" $ const users
-        putPrivmsg dest $ nick <> ", " <> fromJust msg
+        putPrivmsg dest $ CI.original nick <> ", " <> fromJust msg
 
 -- |
 onMatch :: IRC -> Mind ()
@@ -306,7 +310,7 @@ logPriv (Privmsg nick name host dest text) = do
     time <- fmap T.pack . liftIO $ do
         formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" <$> getCurrentTime
     let path = logPath <> host <> " " <> T.unpack dest
-        msg = T.cons '\n' $ T.intercalate "\t" [time, nick, text]
+        msg = T.cons '\n' $ T.intercalate "\t" [time, CI.original nick, text]
     appendFileSafe path msg
 
 -- }}}
@@ -346,7 +350,7 @@ joinInv (Invite nick name host dest chan) = unlessBanned $ do
     edest <- sees currDest
     let e = flip fmap edest $ \c -> do
         mwhen (stChanJoin c) $ write $ "JOIN " <> chan
-    either (warn . noChan . userNick) id e
+    either (warn . noChan . origNick) id e
   where
     noChan = ("Not a channel, " <>)
 
@@ -406,7 +410,7 @@ welcomeNum _ = do
 whoisNum :: IRC -> Mind ()
 whoisNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     let xs = T.words a
-        nick = atDef "" xs 0
+        nick = CI.mk $ atDef "" xs 0
         name = atDef "" xs 1
         host = atDef "" xs 2
     e <- modUser nick $ \u -> u { userName = name
@@ -432,7 +436,7 @@ userlistNum (Numeric n ma t) = do
     flip (maybe $ noNumeric "353") ma $ \chan -> do
         musers <- join . fmap (M.lookup host) <$> readConf (dir <> "UserStats")
         forM_ (T.words t) $ \modenick -> do
-            let (ircmode, nick) = T.break (`notElem` "~&@%+") modenick
+            let (ircmode, nick) = CI.mk <$> T.break (`notElem` "~&@%+") modenick
                 mode = toMode (T.unpack ircmode)
                 users = stServUsers server
                 mu = mapChans (M.insert chan mode) <$> M.lookup nick users

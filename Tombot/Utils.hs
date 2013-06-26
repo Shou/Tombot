@@ -172,7 +172,7 @@ getChanField chan f = do
     channel <- getChan chan
     return $ fmap f channel
 
-getUser :: Text -> Mind (Maybe User)
+getUser :: Nick -> Mind (Maybe User)
 getUser nick = sees currServ >>= return . M.lookup nick . stServUsers
 
 mapChans f user = user { userChans = f $ userChans user }
@@ -218,12 +218,12 @@ modChanPrefix :: Text -> ([Char] -> [Char]) -> Mind (Either Text ())
 modChanPrefix chan f = modChan chan $ \c -> c { stChanPrefix = f $ stChanPrefix c }
 
 -- | Modify User data.
-modUser :: Text -> (User -> User) -> Mind (Either Text ())
+modUser :: Nick -> (User -> User) -> Mind (Either Text ())
 modUser user f = do
     server <- sees currServ
     let us = stServUsers server
         mu = M.lookup user us
-        eu = note ("No user: " <> user) mu
+        eu = note ("No user: " <> CI.original user) mu
         us' = maybe us (flip (M.insert user) us . f) mu
     sets $ \k -> k { currServ = server { stServUsers = us' } }
     return $ void eu
@@ -272,7 +272,7 @@ toStServ (Server host port chans nicks name nsid) =
 -- | When predicate `p' is True, run `m', otherwise return `()'.
 whenStat :: (Either [Char] UserStatus -> Bool) -> Mind () -> Mind ()
 whenStat p m = do
-    dest <- either userNick stChanName <$> sees currDest
+    dest <- either origNick stChanName <$> sees currDest
     chans <- sees $ userChans . currUser
     stat <- sees $ userStat . currUser
     let isMode = maybe False (p . Left) $ M.lookup dest chans
@@ -285,7 +285,7 @@ whenStat p m = do
 -- | When predicate `p' is True, run `m', otherwise return `mempty'.
 mwhenStat :: Monoid a => (Either [Char] UserStatus -> Bool) -> Mind a -> Mind a
 mwhenStat p m = do
-    dest <- either userNick stChanName <$> sees currDest
+    dest <- either origNick stChanName <$> sees currDest
     chans <- sees $ userChans . currUser
     stat <- sees $ userStat . currUser
     let isMode = maybe False (p . Left) $ M.lookup dest chans
@@ -303,6 +303,9 @@ mwhenUserStat p = mwhenStat (either (const False) p)
 
 unlessBanned :: Mind () -> Mind ()
 unlessBanned m = whenStat (either (const False) (/= Banned)) m
+
+origNick :: User -> Text
+origNick = CI.original . userNick
 
 -- }}}
 
@@ -513,7 +516,7 @@ pipeJoin (x:y:xs) | T.length (x <> y) < 420 = (Just $ x <> " | " <> y, xs)
 -- {{{ IRC Mind utils
 
 -- | Adapt the Current to the channel.
-adaptWith :: Text -> Text -> Text -> Text
+adaptWith :: Text -> Nick -> Text -> Text
           -> (User -> (Users -> Users)) -> Mind ()
 adaptWith chan nick name host f = do
     mchan <- sees $ M.lookup chan . stServChans . currServ

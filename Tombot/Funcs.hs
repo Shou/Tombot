@@ -26,6 +26,7 @@ import Control.Monad.State
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.List
 import Data.Map (Map)
@@ -234,7 +235,7 @@ britify str = do
 -- | Set the channel's ChanAutoJoin value
 cajoin :: Func
 cajoin str = do
-    dest <- either userNick stChanName <$> sees currDest
+    dest <- either origNick stChanName <$> sees currDest
     if T.null $ T.strip str
     then do
         mchan <- M.lookup dest . stServChans . currServ <$> see
@@ -249,7 +250,7 @@ cajoin str = do
 -- | Set the channel's ChanJoin value
 cjoin :: Func
 cjoin str = do
-    dest <- either userNick stChanName <$> sees currDest
+    dest <- either origNick stChanName <$> sees currDest
     if T.null $ T.strip str
     then do
         mchan <- M.lookup dest . stServChans . currServ <$> see
@@ -308,7 +309,7 @@ eval str = do
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = mwhenUserStat (>= Admin) $ do
-    d <- either userNick stChanName . currDest <$> see
+    d <- either origNick stChanName . currDest <$> see
     kill name
     tid <- forkMi $ whileAlive $ do
         funcs <- stConfFuncs <$> readConfig
@@ -423,7 +424,7 @@ list :: Func
 list str = do
     funcs <- stConfFuncs <$> readConfig
     edest <- sees currDest
-    let dest = either userNick stChanName edest
+    let dest = either origNick stChanName edest
     if T.null $ T.strip str
     then do
         let ea = fmap stChanFuncs edest
@@ -498,7 +499,7 @@ history str = do
     host <- stServHost <$> sees currServ
     edest <- sees currDest
     path <- fmap stConfLogPath readConfig
-    let dest = T.unpack $ either userNick stChanName edest
+    let dest = T.unpack $ either origNick stChanName edest
         path' = path <> host <> " " <> dest
     ts <- reverse . T.lines <$> liftIO (T.readFile path')
     let ts' = do
@@ -610,7 +611,7 @@ name _ = sees $ userName . currUser
 
 -- | The current user's nick
 nick :: Func
-nick _ = sees $ userNick . currUser
+nick _ = sees $ origNick . currUser
 
 -- XXX on erroneous NICK, remove it from the list
 -- | Set the bot's nicks
@@ -636,10 +637,10 @@ partchan str
 -- | Set the channel's prefix `Char's
 prefix :: Func
 prefix str = do
-    dest <- either userNick stChanName <$> sees currDest
+    dest <- either origNick stChanName <$> sees currDest
     if T.null $ T.strip str
     then do
-        dest <- either userNick stChanName <$> sees currDest
+        dest <- either origNick stChanName <$> sees currDest
         mchan <- M.lookup dest . stServChans . currServ <$> see
         return $ maybe "" (T.pack . stChanPrefix) mchan
     else mwhenPrivileged $ mwhen (T.length str > 0) $ do
@@ -648,7 +649,7 @@ prefix str = do
 -- | Send a private message to the user.
 priv :: Func
 priv str = do
-    nick <- sees $ userNick . currUser
+    nick <- sees $ origNick . currUser
     mvoid $ putPrivmsg nick str
 
 -- | Pick a random choice or number.
@@ -697,7 +698,7 @@ reload _ = mwhenUserStat (>= Root) $ do
 -- | Remind a user on join.
 remind :: Func
 remind str = do
-    cnick <- sees $ userNick . currUser
+    cnick <- sees $ origNick . currUser
     let f :: Maybe Text -> Maybe Text
         f = maybe (Just msg) $ if nick == cnick
                                then if T.null $ T.strip msg
@@ -745,7 +746,8 @@ reveal str = do
             t <- sees currConfigTMVar
             v <- liftIO . atomically $ readTMVar t
             return . T.pack . show $ v
-        ("User", nick) -> getUser nick >>= return . maybe "" (T.pack . show)
+        ("User", nick) ->
+            getUser (CI.mk nick) >>= return . maybe "" (T.pack . show)
         ("Chan", chan) -> getChan chan >>= return . maybe "" (T.pack . show)
         _ -> return ""
   where
@@ -796,7 +798,7 @@ stat str = do
                 in u { userStat = maybe stat id mv }
             return $ either id (const "") e
   where
-    (nick, value) = bisect (== ' ') str
+    (nick, value) = first CI.mk $ bisect (== ' ') str
 
 -- | Delay a function by n seconds where n is a floating point number.
 sleep :: Func
@@ -832,7 +834,7 @@ tell :: Func
 tell str = do
     serv <- sees $ stServHost . currServ
     edest <- sees $ currDest
-    cnick <- sees $ userNick . currUser
+    cnick <- sees $ origNick . currUser
     if T.null $ T.strip msg'
     then do
         musers <- readLocalStored "tell"
@@ -926,11 +928,11 @@ userlist :: Func
 userlist _ = mwhenPrivileged $ do
     edest <- sees $ currDest
     users <- sees $ M.elems . stServUsers . currServ
-    return $ either userNick (chanNicks users) edest
+    return $ either origNick (chanNicks users) edest
   where
     chanNicks us c = let nicks = filter (M.member (stChanName c) . userChans) us
                          nicks' = filter ((/= Offline) . userStat) nicks
-                     in T.unwords $ map userNick nicks'
+                     in T.unwords $ map origNick nicks'
 
 -- | Set the Config verbosity
 verbosity :: Func

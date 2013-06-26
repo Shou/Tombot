@@ -20,6 +20,7 @@ import Control.Monad.Trans
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.List
 import Data.Map (Map)
@@ -216,7 +217,7 @@ compile funcs = klToText mempty
         -- "Paren-stripper"
         if kwhen hd then do
             t <- klToText mempty tl
-            klToText mempty $ Func name (args <> t) Kempty
+            klToText old $ Func name (args <> t) Kempty
         -- Regular Func
         else do
             flip (maybe $ return mempty) (M.lookup name funcs) $ \f -> do
@@ -230,7 +231,7 @@ compile funcs = klToText mempty
 -- |
 botparse :: Funcs -> Text -> Mind KawaiiLang
 botparse funcs t = fmap (either id id) . decide $ do
-    d <- either userNick stChanName . currDest <$> lift see
+    d <- either origNick stChanName . currDest <$> lift see
     chans <- stServChans . currServ <$> lift see
     let mchan = M.lookup d chans
     unless (isJust mchan) $ lift (warn $ "No channel " <> d) >> left Kempty
@@ -248,7 +249,7 @@ ircparser = A.choice [ nick, mode, quit, ircJoin, part, topic, invite, kick
 
 user = do
     A.char ':'
-    nick <- A.takeWhile (/= '!')
+    nick <- CI.mk <$> A.takeWhile (/= '!')
     A.char '!'
     name <- A.takeWhile (/= '@')
     A.char '@'
@@ -260,7 +261,7 @@ network = do
     A.char ':'
     server <- A.takeWhile (/= ' ')
     A.space
-    return (server, server, server)
+    return (CI.mk server, server, server)
 
 nick = do
     (nick, name, host) <- user

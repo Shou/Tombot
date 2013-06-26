@@ -16,6 +16,7 @@ import Control.Concurrent.STM.TMVar (TMVar)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Either (EitherT)
 
+import Data.CaseInsensitive (CI)
 import Data.Map (Map)
 import Data.Text (Text)
 import Data.Typeable (Typeable)
@@ -92,7 +93,7 @@ data Mood = Mood { moodPers :: Personality
 type Mode = [Char]
 
 -- TODO last activity/online
-data User = User { userNick :: Text
+data User = User { userNick :: Nick
                  , userName :: Text
                  , userHost :: Text
                  , userStat :: UserStatus
@@ -163,7 +164,7 @@ data StServer = StServer { stServHost :: String
                          , stServBotName :: Text
                          , stServNickServId :: Maybe Text
                          , stServStat :: ServStatus
-                         , stServUsers :: Map Text User
+                         , stServUsers :: Users
                          , stServThreads :: Map Text ThreadId
                          } deriving (Show)
 
@@ -205,71 +206,73 @@ type Funcs = Map Text Func
 type Func = Text -> Mind Text
 
 type Modes = Map Text Mode
-type Users = Map Text User
+type Users = Map Nick User
+
+type Nick = CI Text
 
 -- XXX User data?
 --     wat
 -- {{{ IRC
-data IRC = Nick { nickNick :: Text
+data IRC = Nick { nickNick :: Nick
                 , nickName :: Text
                 , nickHost :: Text
                 , nickText :: Text
                 }
-         | Mode { modeNick :: Text
+         | Mode { modeNick :: Nick
                 , modeName :: Text
                 , modeHost :: Text
                 , modeChan :: Text
                 , modeChars :: [Char]
                 , modeText :: Maybe Text
                 }
-         | Quit { quitNick :: Text
+         | Quit { quitNick :: Nick
                 , quitName :: Text
                 , quitHost :: Text
                 , quitText :: Text
                 }
-         | Join { joinNick :: Text
+         | Join { joinNick :: Nick
                 , joinName :: Text
                 , joinHost :: Text
                 , joinChan :: Text
                 }
-         | Part { partNick :: Text
+         | Part { partNick :: Nick
                 , partName :: Text
                 , partHost :: Text
                 , partChan :: Text
                 , partText :: Text
                 }
-         | Topic { topicNick :: Text
+         | Topic { topicNick :: Nick
                  , topicName :: Text
                  , topicHost :: Text
                  , topicChan :: Text
                  , topicText :: Text
                  }
-         | Invite { invNick :: Text
+         | Invite { invNick :: Nick
                   , invName :: Text
                   , invHost :: Text
                   , invDest :: Text
                   , invChan :: Text
                   }
-         | Kick { kickNick :: Text
+         | Kick { kickNick :: Nick
                 , kickName :: Text
                 , kickHost :: Text
                 , kickChans :: Text
                 , kickNicks :: Text
                 , kickText :: Text
                 }
-         | Privmsg { privNick :: Text
+         | Privmsg { privNick :: Nick
                    , privName :: Text
                    , privHost :: Text
                    , privDest :: Text
                    , privText :: Text
                    }
-         | Notice { noticeNick :: Text
+         | Notice { noticeNick :: Nick
                   , noticeName :: Text
                   , noticeHost :: Text
                   , noticeDest :: Text
                   , noticeText :: Text
                   }
-         | Kill { killNick :: Text
+         | Kill { killNick :: Nick
                 , killText :: Text
                 }
          | Ping { pingServer :: Text }
