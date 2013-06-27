@@ -138,6 +138,10 @@ oper = Oper <$> A.choice strs <*> pure Kempty
            , A.string "><"
            , A.string ">>"
            , A.string "+>"
+           , A.string "=="
+           , A.string "/="
+           , A.string "=>"
+           , A.string "/>"
            ]
 
 inParens :: [Text] -> Parser KawaiiLang
@@ -209,6 +213,22 @@ compile funcs = klToText mempty
                                           else return $ old <> t
     -- Bind
     klToText old (Oper ">>" kl) = klToText mempty kl
+    -- Equal
+    klToText old (Oper "==" kl) = do
+        t <- klToText mempty kl
+        if old == t then return "True" else return ""
+    -- Not equal
+    klToText old (Oper "/=" kl) = do
+        t <- klToText mempty kl
+        if old /= t then return "True" else return ""
+    -- Equal, return right
+    klToText old (Oper "=>" kl) = do
+        t <- klToText mempty kl
+        if old == t then return t else return ""
+    -- Not equal, return right
+    klToText old (Oper "/>" kl) = do
+        t <- klToText mempty kl
+        if old /= t then return t else return ""
     -- Parens
     klToText old (Parens kl0 kl1) = klToText mempty kl0 >>= flip klToText kl1
     -- Funcs and applicative

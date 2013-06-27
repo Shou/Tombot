@@ -91,6 +91,8 @@ import System.IO
 -- - wwwjdic
 -- - Monoids!!!!
 --      - mFromLeft, mFromRight, mFromJust, ...
+-- - Difference operator, `\\'
+-- - :write and :read
 
 -- FIXME
 -- - handle Handle errors and rejoin.

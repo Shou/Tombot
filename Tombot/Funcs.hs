@@ -163,11 +163,14 @@ anime str = do
 -- TODO filter
 airing :: Func
 airing str = do
-    let (tn, str') = T.break (== ' ') $ T.stripStart str
-        mn = readMay $ T.unpack tn :: Maybe Int
+    let (tn', str') = bisect (== ' ') str
+        mn = readMay $ T.unpack tn' :: Maybe Int
         n = maybe 10 id mn
+        o = if tn' `elem` ["se", "SE", "st", "ST", "ai", "AI", "et", "ET"]
+            then tn'
+            else "ET"
         string = maybe str (const str') mn
-        url = "http://www.mahou.org/Showtime/?o=ET"
+        url = "http://www.mahou.org/Showtime/?o=" <> T.unpack o
         isSearch = not $ T.null string
         (matches, filters) = wordbreaks ((== '-') . T.head) string
         search = T.unpack $ T.unwords matches
@@ -643,7 +646,7 @@ prefix str = do
         dest <- either origNick stChanName <$> sees currDest
         mchan <- M.lookup dest . stServChans . currServ <$> see
         return $ maybe "" (T.pack . stChanPrefix) mchan
-    else mwhenPrivileged $ mwhen (T.length str > 0) $ do
+    else mwhenPrivileged $ do
         mvoid . modChan dest $ \c -> c { stChanPrefix = T.unpack str }
 
 -- | Send a private message to the user.
@@ -812,7 +815,7 @@ sleep str = do
 --      "letfuncs" file.
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
-store str = mwhenPrivileged $ do
+store str = do
     dir <- fmap stConfDir readConfig
     funcs <- stConfFuncs <$> readConfig
     let f = eval . (func <>)
