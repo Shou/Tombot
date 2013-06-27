@@ -166,13 +166,12 @@ airing str = do
     let (tn', str') = bisect (== ' ') str
         mn = readMay $ T.unpack tn' :: Maybe Int
         n = maybe 10 id mn
-        o = if tn' `elem` ["se", "SE", "st", "ST", "ai", "AI", "et", "ET"]
-            then tn'
-            else "ET"
-        string = maybe str (const str') mn
+        (o, s) = if tn' `elem` ["se", "SE", "st", "ST", "ai", "AI", "et", "ET"]
+            then (tn', str')
+            else ("ET", str)
         url = "http://www.mahou.org/Showtime/?o=" <> T.unpack o
-        isSearch = not $ T.null string
-        (matches, filters) = wordbreaks ((== '-') . T.head) string
+        isSearch = not $ T.null s
+        (matches, filters) = wordbreaks ((== '-') . T.head) s
         search = T.unpack $ T.unwords matches
         filters' = map (tailSafe . T.unpack) filters
     content <- httpGetString url
