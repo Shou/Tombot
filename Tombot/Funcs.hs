@@ -277,8 +277,9 @@ cutify str = do
 ddg :: Func
 ddg str = do
     let burl = ("https://api.duckduckgo.com/?format=json&q=!" <>)
-    (bdy, _, _, _) <- httpGetResponse $ burl $ urlEncode $ T.unpack str
-    return $ T.take 420 . T.pack . show $ bdy
+    headers <- httpHead $ burl $ urlEncode $ T.unpack str
+    liftIO $ print headers
+    return $ maybe "" T.pack $ M.lookup "Location" headers
 
 -- XXX What purpose does this serve now?
 --      - Perhaps we can use it for the planned `load' function.
@@ -523,8 +524,8 @@ host _ = sees $ userHost . currUser
 -- | Get a HTTP header from a request.
 http :: Func
 http str = do
-    (_, hed, _, _) <- httpGetResponse (T.unpack httpURL)
-    return $ maybe "" T.pack $ lookup (T.unpack httpType) hed
+    hed <- httpHead $ T.unpack httpURL
+    return $ maybe "" T.pack $ M.lookup (CI.mk $ T.unpack httpType) hed
   where
     (httpType, httpURL) = bisect (== ' ') str
 
@@ -732,9 +733,12 @@ respond str = mwhenPrivileged $ mwhen (T.length str > 0) $ do
 restart :: Func
 restart _ = mwhenUserStat (== Root) $ do
     tmvars <- M.elems . stConfServs <$> readConfig
-    forM_ tmvars $ \t -> do
+    hs <- forM tmvars $ \t -> do
+        verb "Reading TMVar..."
         c <- liftIO (atomically $ readTMVar t)
-        liftIO . try . hClose $ currHandle c
+        verb "TMVar read."
+        return $! currHandle c
+    forM_ hs (void . liftIO . try . hClose)
     liftIO $ do
         executeFile "tombot" True [] Nothing
         exitImmediately ExitSuccess
@@ -810,8 +814,8 @@ sleep str = do
         Just n -> liftIO $ threadDelay $ fromEnum $ 10^6*n
         _ -> return ()
 
--- TODO only Admins can overwrite old funcs, and they MUST exist in the
---      "letfuncs" file.
+-- XXX check, recursively, if a function refers to itself somehow and avoid
+--     recursion.
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
 store str = do
@@ -819,15 +823,19 @@ store str = do
     funcs <- stConfFuncs <$> readConfig
     let f = eval . (func <>)
     isFunc <- M.member name . stConfFuncs <$> readConfig
-    let reader :: Mind (Maybe (Map Text Text))
-        reader = readLocalStored "letfuncs"
-    isStored <- M.member name . maybe mempty id <$> reader
-    let inserter f = if T.null $ T.strip func
-                     then M.delete name
-                     else M.insert name f
-    mvoid . when (isStored || not isFunc) $ do
-        mapConfig $ \c -> c { stConfFuncs = inserter f $ stConfFuncs c }
-        mvoid $ modLocalStored "letfuncs" $ inserter func
+    mlfuncs <- readLocalStored "letfuncs" :: Mind (Maybe (Map Text Text))
+    let lfuncs = maybe mempty id mlfuncs
+        isStored = M.member name lfuncs
+    verb "isRecursive?"
+    isR <- isRecursive name func lfuncs
+    when isR $ erro $ "Recursive function `" <> name <> "', `" <> func <> "`"
+    munless isR $ do
+        let inserter f = if T.null $ T.strip func
+                         then M.delete name
+                         else M.insert name f
+        mvoid . when (isStored || not isFunc) $ do
+            mapConfig $ \c -> c { stConfFuncs = inserter f $ stConfFuncs c }
+            mvoid $ modLocalStored "letfuncs" $ inserter func
   where
     (name, func) = first T.toLower $ bisect (== ' ') str
 
@@ -921,7 +929,8 @@ urbandict str = do
         . fromJSObject
         <$> result
     text <- either warnShow return etext
-    return $ str <> ": " <> T.replace "\n" " " (T.pack text)
+    mwhen (not $ null text) $ do
+        return $ str <> ": " <> T.replace "\n" " | " (T.pack text)
   where
     warnShow x = warn x >> return ""
 

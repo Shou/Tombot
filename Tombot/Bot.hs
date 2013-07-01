@@ -57,10 +57,14 @@ initialise configt server = do
           }
     void $ runStateT listen currt
 
+-- TODO fix TMVar lock
 -- | Read the IRC handle.
 listen :: Mind ()
 listen = forever $ do
-    h <- currHandle <$> see
+    st <- get
+    mh <- liftIO $ timeout (10^6) $ fst <$> runStateT (currHandle <$> see) st
+    unless (isJust mh) $ erro "There's a TMVar lock somewhere."
+    let h = (\(Just h) -> h) mh
     let tryGetLine :: Mind (Maybe Text)
         tryGetLine = liftIO $ do
             fmap join $ timeout (240*10^6) $ fmap hush $ try $ T.hGetLine h
@@ -95,7 +99,7 @@ respond line = do
             ctcpVersion irc
             printTell irc
             void . forkMi $ onMatch irc
-            runLang irc
+            void . forkMi $ runLang irc
             -- XXX uncomment this when KB goes offline
             logPriv irc
         onInvite irc $ \_ -> do

@@ -26,6 +26,7 @@ import qualified Data.Attoparsec.Text as A
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.UTF8 as BU
+import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.Map (Map)
@@ -89,7 +90,6 @@ parsesed = do
     text <- T.unpack <$> (A.try A.space >> A.takeText) <|> return ""
     return (mat, rep, ins, text)
 
--- [[["Idiot","ばか","","Baka"]],[["noun",["stupidity","bonehead","clod"],
 -- | Google translate parser.
 transparser :: Parser ([[Text]], (Text, [Text]))
 transparser = A.char '[' >> lists
@@ -396,28 +396,29 @@ colourise t = foldr ($) t (openers ++ closers)
 
 -- TODO
 -- |
-httpGetResponse' :: MonadIO m => String -> m (String, [(String, String)], String, String)
+httpGetResponse' :: MonadIO m => String -> m (String, [(CI String, String)], String, String)
 httpGetResponse' url = liftIO $ withManager $ \man -> do
     initReq <- parseUrl url
-    let req = initReq { requestHeaders =
-                            (htitle, useragent) : requestHeaders initReq
+    let req = initReq { requestHeaders = useragent : requestHeaders initReq
                       }
     r <- httpLbs req man
     let b = responseBody r
         s = statusCode $ responseStatus r
         v = responseVersion r
         h = responseHeaders r
+    liftIO $ closeManager man
     return $ ( BU.toString $ B.concat $ BL.toChunks b
              , flip map h $ \(k, v) ->
-                (BU.toString $ CI.original k, BU.toString v)
+                (CI.map BU.toString k, BU.toString v)
              , show s
              , show v
              )
   where
-    htitle = "User-Agent"
-    useragent = "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
+    useragent = ( "User-Agent"
+                , "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
+                )
 
-httpGetResponse :: MonadIO m => String -> m (String, [(String, String)], String, String)
+httpGetResponse :: MonadIO m => String -> m (String, [(CI String, String)], String, String)
 httpGetResponse url = do
     let tryGet = liftIO $ do
             mr <- timeout (2 * 10 ^ 7) (try $ httpGetResponse' url)
@@ -434,14 +435,28 @@ httpGetResponse url = do
 
 
 httpGetString :: MonadIO m => String -> m String
-httpGetString url = liftIO $ withManager $ \man -> do
+httpGetString url = liftIO $  do
     (str, _, _, _) <- httpGetResponse url
     if length str > 10 ^ 6 * 2
         then return ""
         else return str
+
+-- | No redirects or anything, also just the headers.
+httpHead :: MonadIO m => String -> m (Map (CI String) String)
+httpHead url = liftIO $ withManager $ \man -> do
+    initReq <- parseUrl url
+    let req = initReq { requestHeaders = useragent : requestHeaders initReq
+                      , redirectCount = 0
+                      }
+    r <- httpLbs req man
+    let h = responseHeaders r
+    liftIO $ closeManager man
+    return $ M.fromList $ flip map h $ \(k, v) ->
+        (CI.map BU.toString k, BU.toString v)
   where
-    htitle = "User-Agent"
-    useragent = "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
+    useragent = ( "User-Agent"
+                , "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
+                )
 
 -- | Google translate
 gtranslate :: MonadIO m => String -> String -> String
@@ -464,7 +479,8 @@ gtranslate sl tl q = do
 -- | Append to a temporary file and move it to the intended location.
 appendFileSafe :: MonadIO m => FilePath -> Text -> m ()
 appendFileSafe p t = liftIO $ do
-    o <- T.readFile p
+    eo <- try $ T.readFile p
+    o <- either (mvoid . warn) return eo
     writeFileSafe p $ o <> t
 
 -- | Write to a temporary file and move it to the intended location.
@@ -607,6 +623,9 @@ mwhen :: (Monoid a, Monad m) => Bool -> m a -> m a
 mwhen True m = m
 mwhen False _ = return mempty
 
+munless :: (Monoid a, Monad m) => Bool -> m a -> m a
+munless b = mwhen $ not b
+
 -- | Join until predicate `p' is `True' on the joined list and then return the
 --   list as it was just before `True' was returned.
 --
@@ -645,11 +664,11 @@ sets f = do
 
 -- |
 see :: Mind Current
-see = get >>= liftIO . atomically . readTMVar
+see = get >>= \c -> liftIO $! atomically $! readTMVar $! c
 
 -- |
 sees :: (Current -> a) -> Mind a
-sees f = fmap f $ get >>= liftIO . atomically . readTMVar
+sees f = fmap f $! get >>= \c -> liftIO $! atomically $! readTMVar $! c
 
 -- }}}
 

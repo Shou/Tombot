@@ -93,6 +93,7 @@ import System.IO
 --      - mFromLeft, mFromRight, mFromJust, ...
 -- - Difference operator, `\\'
 -- - :write and :read
+-- - Rewrite `compile' and use StateT/EitherT
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -109,10 +110,16 @@ import System.IO
 -- - Empty channel name might be inserted on NICK or QUIT.
 -- - User status will be Online if the User PARTs from all channels the bot is
 --   in and then quitting.
--- - Reverse pipe is not working because of bug in `compile'.
---      - Rewrite it and use StateT
--- - Case insensitive name matching.
---      - Specifically on tells and reminders.
+--      - Make the user appear Offline when absent from the bot.
+-- - TMVar lock
+-- - Function permissions are not configurable at runtime.
+-- - Disallow recursive functions, such as `:let test :test'.
+--      - Only allow n recursions instead.
+--          - This means we allow recursive functions, but not ones that last
+--            forever.
+-- - Function data, keeping the state of the functions.
+--      - Recursion counter
+--      - Function permissions
 
 -- REVIEW
 -- - Keep track of UserStat

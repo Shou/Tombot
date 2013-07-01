@@ -7,7 +7,13 @@
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE TupleSections #-}
 
-module Tombot.Parser (botparse, botparser, ircparser, compile) where
+module Tombot.Parser (
+  botparse
+, botparser
+, ircparser
+, compile
+, isRecursive
+) where
 
 -- {{{ Imports
 import Tombot.Types
@@ -259,6 +265,33 @@ botparse funcs t = fmap (either id id) . decide $ do
         parser = botparser (stChanPrefix chan) (M.keys funcs)
         mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
     return $ maybe Kempty id mkl
+
+-- | Is the `Func' recursive?
+isRecursive :: Text -> Text -> Map Text Text -> Mind Bool
+isRecursive n f lfuncs = do
+    funcs <- stConfFuncs <$> readConfig
+    let meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
+        allfuncs =
+            if isJust meval
+            then M.insert n return . M.union funcs $ M.map (fromJust meval) lfuncs
+            else M.insert n return funcs
+    deps <- filter (`elem` M.keys lfuncs) . map funcName . flip onlyFuncs [] <$> botparse allfuncs f
+    verb f >> verb deps
+    if n `elem` deps
+    then verb ("isRecursive: `" <> f <> "' points to " <> n) >> return True
+    else fmap or . forM deps $ \fn -> do
+        let mf = M.lookup fn lfuncs
+        if isJust mf
+        then isRecursive n (fromJust mf) lfuncs
+        else return False
+
+funcName (Func n _ _) = n
+
+onlyFuncs :: KawaiiLang -> [KawaiiLang] -> [KawaiiLang]
+onlyFuncs f@(Func n a kl) acc = onlyFuncs kl (Func n a Kempty : acc)
+onlyFuncs (Oper _ kl) acc = onlyFuncs kl acc
+onlyFuncs (Parens kl0 kl1) acc = onlyFuncs kl1 (onlyFuncs kl0 [] ++ acc)
+onlyFuncs Kempty acc = acc
 
 -- }}}
 
