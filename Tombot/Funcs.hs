@@ -40,7 +40,7 @@ import Debug.Trace
 
 import qualified Language.Haskell.Interpreter as H
 
-import Network.HTTP (urlEncode)
+import Network.HTTP (urlDecode, urlEncode)
 
 import System.Posix.Process (executeFile, exitImmediately)
 import System.Exit (ExitCode(ExitSuccess))
@@ -176,15 +176,10 @@ airing str = do
         filters' = map (tailSafe . T.unpack) filters
     content <- httpGetString url
     let elem = fromMaybeElement $ parseXMLDoc content
-        qTable = QName "table" Nothing Nothing
-        aSummary = [Attr (QName "summary" Nothing Nothing) "Currently Airing"]
-        table = findElementsAttrs qTable aSummary elem
-        table2 = join $ fmap (findElementsIn qTable) table
-        qTr = QName "tr" Nothing Nothing
-        trs :: [Element]
-        trs = drop 1 . join $ fmap (findElements qTr) table2
+        current = getAnimes elem "Currently Airing"
+        soon = getAnimes elem "Starting Soon"
         tds :: [[String]]
-        tds = fmap (fmap elemsText . contentsToEls . elContent) trs
+        tds = current ++ soon
         f (_ : series : season : station : company : time : eta : xs) acc =
             let seri = "\ETX10" ++ series ++ "\ETX"
                 tim' = "\ETX06" ++ time ++ "\ETX"
@@ -204,10 +199,20 @@ airing str = do
                         then proSearch : acc
                         else acc
                else nonSearch : acc
+        f _ acc = acc
         mangas = take n $ foldr f [] tds
     return . T.pack $ joinUntil ((>= 400) . length) ", " mangas
   where
     istrip = unwords . words
+    getAnimes :: Element -> String -> [[String]]
+    getAnimes html tname =
+        let qTable = QName "table" Nothing Nothing
+            aSummary = [Attr (QName "summary" Nothing Nothing) tname]
+            table = findElementsAttrs qTable aSummary html
+            table2 = join $ fmap (findElementsIn qTable) table
+            qTr = QName "tr" Nothing Nothing
+            trs = drop 1 . join $ fmap (findElements qTr) table2
+        in fmap (fmap elemsText . contentsToEls . elContent) trs
 
 -- TODO multiple users
 --      ban by hostname
@@ -278,8 +283,10 @@ ddg :: Func
 ddg str = do
     let burl = ("https://api.duckduckgo.com/?format=json&q=!" <>)
     headers <- httpHead $ burl $ urlEncode $ T.unpack str
-    liftIO $ print headers
-    return $ maybe "" T.pack $ M.lookup "Location" headers
+    let ferurl = maybe "" T.pack $ M.lookup "Location" headers
+        (_, eurl) = snd . bisect (== '=') <$> bisect (== '=') ferurl
+        rurl = T.pack $ urlDecode $ T.unpack eurl
+    return rurl
 
 -- XXX What purpose does this serve now?
 --      - Perhaps we can use it for the planned `load' function.

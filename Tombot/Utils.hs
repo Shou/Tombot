@@ -443,16 +443,23 @@ httpGetString url = liftIO $  do
 
 -- | No redirects or anything, also just the headers.
 httpHead :: MonadIO m => String -> m (Map (CI String) String)
-httpHead url = liftIO $ withManager $ \man -> do
-    initReq <- parseUrl url
-    let req = initReq { requestHeaders = useragent : requestHeaders initReq
-                      , redirectCount = 0
-                      }
-    r <- httpLbs req man
-    let h = responseHeaders r
-    liftIO $ closeManager man
-    return $ M.fromList $ flip map h $ \(k, v) ->
-        (CI.map BU.toString k, BU.toString v)
+httpHead url = liftIO $ do
+    e <- E.try $ withManager $ \man -> do
+        initReq <- parseUrl url
+        let req = initReq { requestHeaders = useragent : requestHeaders initReq
+                          , redirectCount = 0
+                          }
+        r <- httpLbs req man
+        let h = responseHeaders r
+        liftIO $ closeManager man
+        return $ M.fromList $ flip map h $ \(k, v) ->
+            (CI.map BU.toString k, BU.toString v)
+    case e of
+        Right a -> return a
+        Left (StatusCodeException _ headers _) ->
+            return $ M.fromList $ flip map headers $ \(k, v) ->
+                (CI.map BU.toString k, BU.toString v)
+        Left _ -> return mempty
   where
     useragent = ( "User-Agent"
                 , "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
