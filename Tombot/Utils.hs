@@ -296,7 +296,7 @@ mwhenStat p m = do
         | otherwise -> return mempty
 
 mwhenPrivileged :: Monoid a => Mind a -> Mind a
-mwhenPrivileged = mwhenStat (either isMod (>= Admin))
+mwhenPrivileged = mwhenStat (either isMod (>= OP))
 
 mwhenUserStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
 mwhenUserStat p = mwhenStat (either (const False) p)

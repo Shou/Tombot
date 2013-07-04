@@ -296,6 +296,7 @@ onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
             indexes = [ '\\' : show x | x <- [0 .. 9]]
             replacer = zipWith replace indexes (T.unpack text : ins)
             resp' = foldr ($) resp replacer
+        when (null resp') $ left ()
         lift $ runLang $ irc { privText = T.pack resp' }
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)

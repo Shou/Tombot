@@ -70,6 +70,7 @@ instance Show StConfig where
 data UserStatus = Offline
                 | Banned
                 | Online
+                | OP
                 | Admin
                 | Root
                 deriving (Eq, Ord, Read, Show)
