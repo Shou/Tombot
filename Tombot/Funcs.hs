@@ -5,6 +5,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Tombot.Funcs (funcs) where
 
@@ -740,7 +741,7 @@ respond str = mwhenPrivileged $ mwhen (T.length str > 0) $ do
 restart :: Func
 restart _ = mwhenUserStat (== Root) $ do
     tmvars <- M.elems . stConfServs <$> readConfig
-    hs <- forM tmvars $ \t -> do
+    !hs <- forM tmvars $ \t -> do
         verb "Reading TMVar..."
         c <- liftIO (atomically $ readTMVar t)
         verb "TMVar read."

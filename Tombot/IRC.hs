@@ -277,11 +277,13 @@ printTell (Privmsg nick _ _ dest text) = unlessBanned $ do
         modLocalStored "tell" $ const users
         putPrivmsg dest $ CI.original nick <> ", " <> fromJust msg
 
+-- FIXME
 -- |
 onMatch :: IRC -> Mind ()
 onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
-    dir <- fmap stConfDir readConfig
     mons <- readLocalStored $ "respond"
+    funcs <- stConfFuncs <$> readConfig
+    mlfuncs <- readLocalStored "letfuncs"
     let ons = maybe mempty M.toList mons
     void . decide $ forM_ ons $ \(match, (ins, resp)) -> deci . decide $ do
         let regex = mkRegexWithOpts match False ins
@@ -296,8 +298,14 @@ onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
             indexes = [ '\\' : show x | x <- [0 .. 9]]
             replacer = zipWith replace indexes (T.unpack text : ins)
             resp' = foldr ($) resp replacer
-        when (null resp') $ left ()
-        lift $ runLang $ irc { privText = T.pack resp' }
+            meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
+            allfuncs =
+                if isJust meval
+                then M.union funcs $ maybe mempty (M.map $ fromJust meval) mlfuncs
+                else funcs
+        t <- lift $ botparse allfuncs (T.pack resp') >>= compile allfuncs
+        when (T.null . T.strip $ t) $ left ()
+        lift $ putPrivmsg dest t
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
     deci :: Mind (Either () ()) -> Decide () ()
