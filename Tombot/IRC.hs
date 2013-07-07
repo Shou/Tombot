@@ -31,6 +31,7 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
+import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (formatTime, getCurrentTime)
@@ -282,10 +283,9 @@ printTell (Privmsg nick _ _ dest text) = unlessBanned $ do
 onMatch :: IRC -> Mind ()
 onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
     mons <- readLocalStored $ "respond"
-    funcs <- stConfFuncs <$> readConfig
-    mlfuncs <- readLocalStored "letfuncs"
-    let ons = maybe mempty M.toList mons
-    void . decide $ forM_ ons $ \(match, (ins, resp)) -> deci . decide $ do
+    let ons :: [(String, (Bool, Int, String))]
+        ons = sortBy (comparing $ snd3 . snd) $ maybe mempty M.toList mons
+    void . decide $ forM_ ons $ \(match, (ins, n, resp)) -> deci . decide $ do
         let regex = mkRegexWithOpts match False ins
         emins <- try $ return $! matchRegex regex $ T.unpack text
         when (isLeft emins) $ do
@@ -298,14 +298,7 @@ onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
             indexes = [ '\\' : show x | x <- [0 .. 9]]
             replacer = zipWith replace indexes (T.unpack text : ins)
             resp' = foldr ($) resp replacer
-            meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
-            allfuncs =
-                if isJust meval
-                then M.union funcs $ maybe mempty (M.map $ fromJust meval) mlfuncs
-                else funcs
-        t <- lift $ botparse allfuncs (T.pack resp') >>= compile allfuncs
-        when (T.null . T.strip $ t) $ left ()
-        lift $ putPrivmsg dest t
+        lift $ runLang $ irc { privText = T.pack resp' }
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
     deci :: Mind (Either () ()) -> Decide () ()

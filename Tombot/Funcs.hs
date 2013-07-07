@@ -255,6 +255,10 @@ cajoin str = do
                                }
         return ""
 
+-- | Join a channel.
+chanjoin :: Func
+chanjoin str = mvoid . write $ "JOIN " <> str
+
 -- | Set the channel's ChanJoin value
 cjoin :: Func
 cjoin str = do
@@ -430,6 +434,9 @@ quit str = mwhenUserStat (>= Admin) $ do
 count :: Func
 count str = return $ T.pack . show $ T.length str
 
+lastfm :: Func
+lastfm str = return ""
+
 -- | List the available Funcs.
 list :: Func
 list str = do
@@ -545,12 +552,9 @@ isup str = do
     (_, _, status, _) <- httpGetResponse (T.unpack url)
     return $ if isPrefixOf "2" status then "True" else "False"
 
--- TODO add default Channel data
--- | Join a channel.
-chanjoin :: Func
-chanjoin str = do
-    write $ "JOIN " <> str
-    return ""
+-- TODO
+json :: Func
+json str = return ""
 
 -- TODO filter
 -- | Recent manga releases.
@@ -723,17 +727,18 @@ remind str = do
 -- | Respond to a regex match by running a function with any match(es) as the
 --   argument.
 --
--- > :on /http:\/\/\S+/ title \0
--- > :on /what should i do/i ra |Nothing!|Do your work!|Stop procrastinating!
+-- > :on /http:\/\/\S+/ :title \0
+-- > :on /what should i do/i :ra |Nothing!|Do your work!|Stop procrastinating!
 respond :: Func
-respond str = mwhenPrivileged $ mwhen (T.length str > 0) $ do
+respond str = mwhenPrivileged $ do
     dir <- fmap stConfDir readConfig
-    let c = str `T.index` 0
-        m = A.maybeResult . flip A.feed "" $ A.parse parsematch str
-    flip (maybe $ pure "") m $ \(mat, ins, string) -> do
-        let f = if null $ dropWhile (== ' ') string
+    let m = A.maybeResult . flip A.feed "" $ A.parse parsematch str
+    flip (maybe $ pure "") m $ \(mat, ins, str') -> do
+        let (ns, string) = fmap T.unpack . bisect (== ' ') $ T.pack str'
+            n = maybe 10 id $ readMay (T.unpack ns) :: Int
+            f = if null $ dropWhile (== ' ') string
                 then Nothing
-                else Just (ins, string)
+                else Just (ins, n, string)
         mvoid . modLocalStored "respond" $ M.alter (const f) mat
 
 -- FIXME restarting takes a while, is probably because of STM
@@ -915,7 +920,7 @@ translate str = do
         (tl, string) = if T.length tl' == 2 && T.all isLower tl'
                        then (T.unpack tl', T.unpack str')
                        else ("en", T.unpack str)
-    m <- gtranslate "auto" tl string
+    !m <- gtranslate "auto" tl string
     let mtrans = (map $ maybeToMonoid . headMay) . fst <$> m
     return . T.concat $ maybe [] id mtrans
 

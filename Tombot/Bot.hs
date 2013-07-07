@@ -100,7 +100,6 @@ respond line = do
             printTell irc
             void . forkMi $ onMatch irc
             void . forkMi $ runLang irc
-            -- XXX uncomment this when KB goes offline
             logPriv irc
         onInvite irc $ \_ -> do
             adaptInv irc

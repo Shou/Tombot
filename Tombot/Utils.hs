@@ -747,6 +747,13 @@ mapConfig f = do
 
 -- }}}
 
+-- {{{ Tuple utils
+
+snd3 :: (a, b, c) -> b
+snd3 (_, b, _) = b
+
+-- }}}
+
 -- {{{ XML utils
 
 -- XXX this is a UGLY AS FLIP

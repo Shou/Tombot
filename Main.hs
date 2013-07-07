@@ -120,6 +120,10 @@ import System.IO
 -- - Function data, keeping the state of the functions.
 --      - Recursion counter
 --      - Function permissions
+-- - onMatch priority system using integers.
+-- - We can use Attoparsec to parse pseudo-types that are within strings.
+--      - This might be helpful when validating functions.
+-- - Lessen the amount of reads/writes from the TMVar
 
 -- REVIEW
 -- - Keep track of UserStat

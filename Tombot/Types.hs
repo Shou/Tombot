@@ -75,22 +75,6 @@ data UserStatus = Offline
                 | Root
                 deriving (Eq, Ord, Read, Show)
 
-data Personality = Deredere
-                 -- ^ Purely soft/kind.
-                 | Kuudere
-                 -- ^ Cold/unassuming to soft/kind.
-                 | Tsundere
-                 -- ^ Cold/hostile to soft/kind.
-                 | Tsunshun
-                 -- ^ Cold/hostile to depressed.
-                 | Yandere
-                 -- ^ Soft/kind to destructive/protective/assuming.
-                 deriving (Show)
-
-data Mood = Mood { moodPers :: Personality
-                 , moodGrid :: (Int, Int)
-                 } deriving (Show)
-
 type Mode = [Char]
 
 -- TODO last activity/online
