@@ -69,9 +69,6 @@ instance Show StConfig where
                        , "}"
                        ]
 
-instance Show Funk where
-    show (Funk n f s) = "Funk " ++ show n ++ " _ " ++ show s
-
 data UserStatus = Offline
                 | Banned
                 | Online

@@ -5,6 +5,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE DoAndIfThenElse #-}
 {-# OPTIONS_GHC -fno-warn-overlapping-patterns #-}
 
 module Tombot.Utils where
@@ -414,6 +415,17 @@ funky :: Funky a -> Mind a
 funky m = do
     s <- get
     fmap fst . runStateT m $ StFunk 0 39
+
+allfuncs :: Mind Funcs
+allfuncs = do
+    funcs <- stConfFuncs <$> readConfig
+    mlfuncs <- readLocalStored "letfuncs"
+    let meval = (\f -> \g -> f . (g <>)) . funkFunc <$> M.lookup "eval" funcs
+    if isJust meval
+    then let eval = fromJust meval
+             lfuncs = M.mapWithKey (\k v -> Funk k (eval v) Online)
+         in return $ M.union funcs $ maybe mempty lfuncs mlfuncs
+    else return funcs
 
 -- }}}
 

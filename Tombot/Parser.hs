@@ -12,6 +12,7 @@ module Tombot.Parser (
 , botparser
 , ircparser
 , compile
+, trySpaced
 ) where
 
 -- {{{ Imports
@@ -37,6 +38,8 @@ import Data.Ord
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+
+import Debug.Trace
 
 -- }}}
 
@@ -115,9 +118,9 @@ limbs fs = foldr mappend Kempty <$> A.manyTill anyLimb (A.try A.endOfInput)
 -- of the input on the last space skipper.
 trySpaced :: Parser a -> Parser a
 trySpaced f = do
-    A.try A.space
+    A.try A.skipSpace
     v <- f
-    A.try A.space
+    A.try A.skipSpace
     return v
 
 -- | Match against any of the strings in `cmds'.
