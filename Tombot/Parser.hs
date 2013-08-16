@@ -12,7 +12,6 @@ module Tombot.Parser (
 , botparser
 , ircparser
 , compile
-, isRecursive
 ) where
 
 -- {{{ Imports
@@ -23,6 +22,7 @@ import Control.Applicative
 import Control.Error
 import Control.Monad
 import Control.Monad.Trans
+import Control.Monad.State
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
@@ -105,19 +105,19 @@ limbs :: [Text] -> Parser KawaiiLang
 limbs fs = foldr mappend Kempty <$> A.manyTill anyLimb (A.try A.endOfInput)
   where
     anyLimb = do
-        noSpaces (fullCmd fs)
+        trySpaced (fullCmd fs)
         <|>
-        noSpaces oper
+        trySpaced oper
         <|>
-        noSpaces (inParens fs)
+        trySpaced (inParens fs)
 
 -- | Ignore spaces before and after, while also making sure it's not at the end
 -- of the input on the last space skipper.
-noSpaces :: Parser a -> Parser a
-noSpaces f = do
-    ignoreSpaces
+trySpaced :: Parser a -> Parser a
+trySpaced f = do
+    A.try A.space
     v <- f
-    ignoreSpaces
+    A.try A.space
     return v
 
 -- | Match against any of the strings in `cmds'.
@@ -190,10 +190,10 @@ fullCmd fs = do
 --      - The parser strips spaces at the end, that's how. Get rid of that.
 -- TODO clean up and split this function
 -- | Compile `KawaiiLang' into `IO Text'.
-compile :: Map Text Func -> KawaiiLang -> Mind Text
-compile funcs = klToText mempty
+compile :: Map Text Funk -> KawaiiLang -> Mind Text
+compile funcs = funky . klToText mempty
   where
-    klToText :: Text -> KawaiiLang -> Mind Text
+    klToText :: Text -> KawaiiLang -> Funky Text
     -- Append
     klToText old (Oper "++" kl) = klToText old kl
     -- Pipe
@@ -247,8 +247,12 @@ compile funcs = klToText mempty
         -- Regular Func
         else do
             flip (maybe $ return mempty) (M.lookup name funcs) $ \f -> do
-                t <- f args
-                klToText (old <> t) kl
+                fu <- get
+                if stFunkRecs fu < stFunkMax fu then do
+                    t <- lift $ funkFunc f args
+                    put $ StFunk (stFunkRecs fu + 1) (stFunkMax fu)
+                    klToText (old <> t) kl
+                else return "pls no recursive functions"
       where
         kwhen (Oper "<-" _) = True
         kwhen _ = False
@@ -265,33 +269,6 @@ botparse funcs t = fmap (either id id) . decide $ do
         parser = botparser (stChanPrefix chan) (M.keys funcs)
         mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
     return $ maybe Kempty id mkl
-
--- | Is the `Func' recursive?
-isRecursive :: Text -> Text -> Map Text Text -> Mind Bool
-isRecursive n f lfuncs = do
-    funcs <- stConfFuncs <$> readConfig
-    let meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
-        allfuncs =
-            if isJust meval
-            then M.insert n return . M.union funcs $ M.map (fromJust meval) lfuncs
-            else M.insert n return funcs
-    deps <- filter (`elem` M.keys lfuncs) . map funcName . flip onlyFuncs [] <$> botparse allfuncs f
-    verb f >> verb deps
-    if n `elem` deps
-    then verb ("isRecursive: `" <> f <> "' points to " <> n) >> return True
-    else fmap or . forM deps $ \fn -> do
-        let mf = M.lookup fn lfuncs
-        if isJust mf
-        then isRecursive n (fromJust mf) lfuncs
-        else return False
-
-funcName (Func n _ _) = n
-
-onlyFuncs :: KawaiiLang -> [KawaiiLang] -> [KawaiiLang]
-onlyFuncs f@(Func n a kl) acc = onlyFuncs kl (Func n a Kempty : acc)
-onlyFuncs (Oper _ kl) acc = onlyFuncs kl acc
-onlyFuncs (Parens kl0 kl1) acc = onlyFuncs kl1 (onlyFuncs kl0 [] ++ acc)
-onlyFuncs Kempty acc = acc
 
 -- }}}
 
@@ -316,10 +293,12 @@ network = do
     A.space
     return (CI.mk server, server, server)
 
+-- XXX test this
 nick = do
     (nick, name, host) <- user
     A.string "NICK"
     A.space
+    A.try $ A.char ':'
     text <- A.takeText
     return $ Nick nick name host text
 

@@ -6,14 +6,16 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Tombot.Types where
 
 -- {{{ Imports
 
 import Control.Concurrent (ThreadId)
-import Control.Concurrent.STM.TMVar (TMVar)
-import Control.Monad.State (StateT)
+import Control.Concurrent.STM
+import Control.Monad.State
 import Control.Monad.Trans.Either (EitherT)
 
 import Data.CaseInsensitive (CI)
@@ -66,6 +68,9 @@ instance Show StConfig where
                        , servs
                        , "}"
                        ]
+
+instance Show Funk where
+    show (Funk n f s) = "Funk " ++ show n ++ " _ " ++ show s
 
 data UserStatus = Offline
                 | Banned
@@ -163,6 +168,18 @@ data Current = Current { currUser :: User
                        , currThreadId :: ThreadId
                        } deriving (Typeable)
 
+data Kurrent = Kurrent { kurrUser :: User
+                       , kurrMode :: Text
+                       , kurrHost :: String
+                       , kurrPort :: Int
+                       , kurrChans :: [Channel]
+                       , kurrBotNicks :: [String]
+                       , kurrBotName :: String
+                       , kurrNickservId :: String
+                       , kurrDest :: Either User StChannel
+                       , kurrHandle :: Handle
+                       }
+
 data Config = Config { confVerbosity :: Int
                      -- ^ Verbosity level.
                      -- 0: None
@@ -184,10 +201,22 @@ data StConfig = StConfig { stConfVerb :: Int
                          , stConfServs :: Map String (TMVar Current)
                          }
 
-type Mind = StateT (TMVar Current) IO
-type Decide e a = EitherT e Mind a
+data StFunk = StFunk { stFunkRecs :: Int
+                     , stFunkMax :: Int
+                     }
 
-type Funcs = Map Text Func
+data Funk = Funk { funkName :: Text
+                 , funkFunc :: Func
+                 , funkStat :: UserStatus
+                 }
+
+
+type Mind = StateT (TMVar Current) IO
+type Love = StateT Kurrent IO
+type Decide e = EitherT e Mind
+type Funky = StateT StFunk Mind
+
+type Funcs = Map Text Funk
 type Func = Text -> Mind Text
 
 type Modes = Map Text Mode

@@ -255,12 +255,19 @@ runLang :: IRC -> Mind ()
 runLang (Privmsg nick name host d t) = unlessBanned $ do
     funcs <- stConfFuncs <$> readConfig
     mlfuncs <- readLocalStored "letfuncs"
-    let meval = (\f -> \g -> f . (g <>)) <$> M.lookup "eval" funcs
+    let meval = (\f -> \g -> f . (g <>)) . funkFunc <$> M.lookup "eval" funcs
         allfuncs =
             if isJust meval
-            then M.union funcs $ maybe mempty (M.map $ fromJust meval) mlfuncs
+            then let eval = fromJust meval
+                     lfuncs = M.mapWithKey (\k v -> Funk k (eval v) Online)
+                 in M.union funcs $ maybe mempty lfuncs mlfuncs
             else funcs
-    botparse allfuncs t >>= compile allfuncs >>= putPrivmsg d
+    verb t
+    kl <- botparse allfuncs t
+    verb kl
+    t <- compile allfuncs kl
+    verb t
+    putPrivmsg d t
 
 -- |
 printTell :: IRC -> Mind ()

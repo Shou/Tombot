@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TupleSections #-}
 
 module Tombot.Funcs (funcs) where
 
@@ -55,74 +56,67 @@ import Text.XML.Light
 -- }}}
 
 
-funcs :: Map Text Func
-funcs = M.fromList [ ("!", ddg)
-                   , ("b", ban)
-                   , ("me", me)
-                   , (">", echo)
-                   , ("<", priv)
-                   , ("k", kick)
-                   , ("m", mode)
-                   , ("del", del)
-                   , ("gay", gay)
-                   , ("ops", ops)
-                   , ("raw", raw)
-                   , ("sed", sed)
-                   , ("v", voice)
-                   , ("an", anime)
-                   , ("in", match)
-                   , ("ma", manga)
-                   , ("^", history)
-                   , ("ai", airing)
-                   , ("bots", bots)
-                   , ("dict", dict)
-                   , ("eval", eval)
-                   , ("help", help)
-                   , ("host", host)
-                   , ("http", http)
-                   , ("isup", isup)
-                   , ("kill", kill)
-                   , ("len", count)
-                   , ("let", store)
-                   , ("name", name)
-                   , ("nick", nick)
-                   , ("quit", quit)
-                   , ("ra", random)
-                   , ("re", remind)
-                   , ("stat", stat)
-                   , ("tell", tell)
-                   , ("wiki", wiki)
-                   , ("+", modeplus)
-                   , ("funcs", list)
-                   , ("kb", kickban)
-                   , ("on", respond)
-                   , ("-", modeminus)
-                   , ("about", about)
-                   , ("cjoin", cjoin)
-                   , ("event", event)
-                   , ("greet", greet)
-                   , ("kanji", kanji)
-                   , ("nicks", nicks)
-                   , ("sleep", sleep)
-                   , ("title", title)
-                   , ("topic", topic)
-                   , ("show", reveal)
-                   , ("us", userlist)
-                   , ("tr", translate)
-                   , ("cajoin", cajoin)
-                   , ("cutify", cutify)
-                   , ("join", chanjoin)
-                   , ("part", partchan)
-                   , ("prefix", prefix)
-                   , ("reload", reload)
-                   , ("romaji", romaji)
-                   , ("urb", urbandict)
-                   , ("verb", verbosity)
-                   , ("reverse", rwords)
-                   , ("britify", britify)
-                   , ("restart", restart)
-                   , ("connect", connectIRC)
-                   ]
+funcs :: Map Text Funk
+funcs = toFunks [ ("!", ddg, Online)
+                , ("b", ban, OP)
+                , ("me", me, Online)
+                , (">", echo, Online)
+                , ("<", priv, Online)
+                , ("k", kick, OP)
+                , ("m", mode, OP)
+                , ("ops", ops, Online)
+                , ("raw", raw, Root)
+                , ("sed", sed, Online)
+                , ("v", voice, OP)
+                , ("^", findMsg, Online)
+                , ("an", anime, Online)
+                , ("in", match, Online)
+                , ("ma", manga, Online)
+                , ("ai", airing, Online)
+                , ("bots", bots, Online)
+                , ("eval", eval, Online)
+                , ("help", help, Online)
+                , ("hist", history, Online)
+                , ("host", host, Online)
+                , ("hs", mueval, Online)
+                , ("http", http, Online)
+                , ("isup", isup, Online)
+                , ("kill", kill, Admin)
+                , ("len", count, Online)
+                , ("let", store, Online)
+                , ("name", name, Online)
+                , ("nick", nick, Online)
+                , ("quit", quit, Admin)
+                , ("ra", random, Online)
+                , ("re", remind, Online)
+                , ("stat", stat, Online)
+                , ("tell", tell, Online)
+                , ("wiki", wiki, Online)
+                , ("funcs", list, Online)
+                , ("kb", kickban, OP)
+                , ("on", respond, OP)
+                , ("cjoin", cjoin, Online)
+                , ("event", event, Admin)
+                , ("kanji", kanji, Online)
+                , ("nicks", nicks, Admin)
+                , ("sleep", sleep, Online)
+                , ("title", title, Online)
+                , ("topic", topic, Online)
+                , ("show", reveal, Online)
+                , ("us", userlist, OP)
+                , ("tr", translate, Online)
+                , ("cajoin", cajoin, Online)
+                , ("join", chanjoin, Online)
+                , ("part", partchan, OP)
+                , ("prefix", prefix, Online)
+                , ("reload", reload, Root)
+                , ("romaji", romaji, Online)
+                , ("urb", urbandict, Online)
+                , ("verb", verbosity, Admin)
+                , ("reverse", rwords, Online)
+                , ("restart", restart, Root)
+                , ("connect", connectIRC, Admin)
+                ]
 
 
 -- TODO
@@ -227,18 +221,7 @@ ban str = do
 
 -- | Respond to `bots'
 bots :: Func
-bots _ = do
-    gr <- greet ""
-    ga <- gay "Haskell!"
-    return $ gr <> " " <> ga
-
--- | Replace words with British slang equivalents.
-britify :: Func
-britify str = do
-    dir <- fmap stConfDir readConfig
-    ml <- readConf $ dir <> "britify"
-    let bs = maybe [] id ml
-    return $ wordReplace str bs
+bots _ = return "Hi! (λ Haskell)"
 
 -- | Set the channel's ChanAutoJoin value
 cajoin :: Func
@@ -274,20 +257,13 @@ cjoin str = do
                                }
         return ""
 
--- TODO
--- | Replace rude/lascivious words with cute ones.
-cutify :: Func
-cutify str = do
-    dir <- fmap stConfDir readConfig
-    ml <- readConf $ dir <> "cutify"
-    let bs = maybe [] id ml
-    return $ wordReplace str bs
-
+-- FIXME !bang my ANUS
 -- | DuckDuckGo !bang search.
 ddg :: Func
 ddg str = do
     let burl = ("https://api.duckduckgo.com/?format=json&q=!" <>)
     headers <- httpHead $ burl $ urlEncode $ T.unpack str
+    verb headers
     let ferurl = maybe "" T.pack $ M.lookup "Location" headers
         (_, eurl) = snd . bisect (== '=') <$> bisect (== '=') ferurl
         rurl = T.pack $ urlDecode $ T.unpack eurl
@@ -305,12 +281,6 @@ dict :: Func
 dict str = do
     return ""
 
--- TODO
--- NOTE how to do this
--- | Difference function.
-diff :: Func
-diff str = return ""
-
 -- | Print the input.
 echo :: Func
 echo = return
@@ -323,7 +293,7 @@ eval str = do
 
 -- | Create an event. Useful with `sleep'.
 event :: Func
-event str = mwhenUserStat (>= Admin) $ do
+event str = do
     d <- either origNick stChanName . currDest <$> see
     kill name
     tid <- forkMi $ whileAlive $ do
@@ -350,33 +320,26 @@ event str = mwhenUserStat (>= Admin) $ do
             let evs' = M.delete name evs
             sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
 
--- TODO strip colors
--- | Rainbow text!
-gay :: Func
-gay str = return $ colorize 0 mempty str' <> "\ETX"
+-- | Alias for `history' and only returning the message.
+findMsg :: Func
+findMsg str = onlyMsg <$> history str
   where
-    pad [x] = ['0', x]
-    pad xs = xs
-    str' = foldr (flip T.replace "") str $ do
-        x <- [0 .. 15]
-        return . T.cons '\ETX' . T.pack . pad $ show x
-    colorize n acc t
-        | T.null t = acc
-        | otherwise = let n' = succ n
-                          color = colors !! mod n (length colors)
-                          char' = T.singleton $ T.head t
-                          acc' = acc <> color <> char'
-                          t' = T.tail t
-                      in colorize n' acc' t'
-    c = ("\ETX00," <>)
-    colors = [c "04", c "07", c "08", c "03", c "02", c "06"]
+    onlyMsg = snd . bisect (== '\t') . snd . bisect (== '\t')
 
+-- TODO
+-- | Function Stat return/change.
+fstat :: Func
+fstat str = return ""
+
+-- TODO nth result argument
 -- | Kanji lookup function.
 kanji :: Func
 kanji str = do
-    m <- gtranslate "ja" "en" $ T.unpack str
-    let mdefs = fmap (T.intercalate ", ") . snd <$> m
-    return $ maybe "" (\(a, b) -> a <> ": " <> b) mdefs
+    let burl = "http://www.csse.monash.edu.au/~jwb/cgi-bin/wwwjdic.cgi?1ZUR"
+        url = burl <> urlEncode (T.unpack str)
+    dict <- lines <$> httpGetString url
+    let s = T.intercalate "; " . map T.pack . take 2 $ dict
+    return s
 
 -- | Kick a user.
 kick :: Func
@@ -391,7 +354,7 @@ kick str = do
 
 -- | Kick and ban a user.
 kickban :: Func
-kickban str = mvoid $ mapM_ ($ str) [kick, ban]
+kickban str = mvoid $ mapM_ ($ str) [ban, kick]
 
 -- | Kill an event
 kill :: Func
@@ -406,7 +369,7 @@ kill str = mwhenPrivileged $ do
 
 -- | Connect to an IRC server.
 connectIRC :: Func
-connectIRC str = mwhenUserStat (>= Admin) $ do
+connectIRC str = do
     mtc <- M.lookup host . stConfServs <$> readConfig
     -- Check if Curr is Disconnected, Connect if so.
     -- But if Nothing then make a new Server and connect. Fork a new thread.
@@ -417,25 +380,28 @@ connectIRC str = mwhenUserStat (>= Admin) $ do
   where
     (host, port) = first T.unpack $ bisect (== ' ') str
 
--- | Disconnect from an IRC server.
-quit :: Func
-quit str = mwhenUserStat (>= Admin) $ do
-    mtc <- M.lookup (T.unpack str) . stConfServs <$> readConfig
-    flip (maybe $ return "") mtc $ \tc -> do
-        mvoid . liftIO . flip runStateT tc $ do
-            h <- sees currHandle
-            tid <- sees currThreadId
-            write $ "QUIT :Good bye :c"
-            liftIO $ do
-                killThread tid
-                hClose h
-
 -- | Count characters.
 count :: Func
 count str = return $ T.pack . show $ T.length str
 
+-- TODO store given argument so the user only has to do `:lastfm' in the future
+-- XXX move JSON parsing to `json' function once that is finished
+-- | Last.fm user get recent track
 lastfm :: Func
-lastfm str = return ""
+lastfm str = do
+    apikey <- getAPIKey "lastfm"
+    let url = [ "http://ws.audioscrobbler.com/2.0/"
+              , "?method=user.getrecenttracks"
+              , "&user=icedtidus"
+              , "&api_key=" <> T.unpack apikey
+              , "&limit=1&extended=1&format=json"
+              ]
+    jsonStr <- httpGetString $ concat url
+    let mresult = decode jsonStr :: Result (JSObject JSValue)
+--        x = runMaybeT $ do
+--                obj <- mresult
+--                return obj
+    return ""
 
 -- | List the available Funcs.
 list :: Func
@@ -469,7 +435,7 @@ list str = do
 -- TODO specify server/channel
 -- | Global message.
 glob :: Func
-glob str = mwhenUserStat (>= Admin) $ do
+glob str = do
     tcs <- M.elems . stConfServs <$> readConfig
     forM_ tcs $ \tc -> void . liftIO . forkIO . void . flip runStateT tc $ do
         chans <- M.keys . stServChans . currServ <$> see
@@ -528,9 +494,7 @@ history str = do
                     else not $ any (`T.isInfixOf` t) filters'
             return t
         mt = ts' `atMay` n
-    return . onlyMsg $ maybe "" id mt
-  where
-    onlyMsg = snd . bisect (== '\t') . snd . bisect (== '\t')
+    return $ maybe "" id mt
 
 -- | The current user's hostname
 host :: Func
@@ -552,6 +516,9 @@ isup str = do
     (_, _, status, _) <- httpGetResponse (T.unpack url)
     return $ if isPrefixOf "2" status then "True" else "False"
 
+-- XXX what will the language look like?
+--     CSS inspired language!
+--     >, [attr="value"], :nth-child, .class, #id, etc, except adjusted for JSON
 -- TODO
 json :: Func
 json str = return ""
@@ -620,6 +587,15 @@ modeplus str = mode $ "+" <> str
 modeminus :: Func
 modeminus str = mode $ "-" <> str
 
+mueval :: Func
+mueval str = do
+    -- FIXME hardcoded filepath is bad
+    let file = "Start.hs"
+        args = [ "-t", "5", "-r", "-n", "-l", file, "-e", T.unpack str ]
+    mkv <- liftIO $ executeFile "mueval" True args Nothing
+    let t = T.pack . show $ (mkv :: String)
+    return t
+
 -- | The current user's name
 name :: Func
 name _ = sees $ userName . currUser
@@ -628,6 +604,7 @@ name _ = sees $ userName . currUser
 nick :: Func
 nick _ = sees $ origNick . currUser
 
+-- TODO
 -- XXX on erroneous NICK, remove it from the list
 -- | Set the bot's nicks
 nicks :: Func
@@ -642,7 +619,7 @@ ops _ = return "++ -> <- <> >< >> +>"
 -- | Part from a channel.
 partchan :: Func
 partchan str
-    | T.null $ T.strip str = mwhenPrivileged $ do
+    | T.null $ T.strip str = do
         edest <- sees currDest
         either (const $ pure "") (parter . stChanName) edest
     | otherwise = mwhenUserStat (>= Admin) $ parter str
@@ -667,6 +644,19 @@ priv str = do
     nick <- sees $ origNick . currUser
     mvoid $ putPrivmsg nick str
 
+-- | Disconnect from an IRC server.
+quit :: Func
+quit str = do
+    mtc <- M.lookup (T.unpack str) . stConfServs <$> readConfig
+    flip (maybe $ return "") mtc $ \tc -> do
+        mvoid . liftIO . flip runStateT tc $ do
+            h <- sees currHandle
+            tid <- sees currThreadId
+            write $ "QUIT :Good bye :c"
+            liftIO $ do
+                killThread tid
+                hClose h
+
 -- | Pick a random choice or number.
 random :: Func
 random str
@@ -687,13 +677,13 @@ random str
 
 -- | Write directly to the IRC handle of the current server.
 raw :: Func
-raw str = mwhenUserStat (== Root) $ mvoid $ write str
+raw str = mvoid $ write str
 
 -- TODO
 -- FIXME this explodes
 -- | Reload the bot's Config and Funcs.
 reload :: Func
-reload _ = mwhenUserStat (>= Root) $ do
+reload _ = do
     confpath <- stConfPath <$> readConfig
     ec <- loadModules [confpath] ["Config"] "config" (H.as :: Config)
     let e = flip fmap ec $ \config -> do
@@ -730,12 +720,13 @@ remind str = do
 -- > :on /http:\/\/\S+/ :title \0
 -- > :on /what should i do/i :ra |Nothing!|Do your work!|Stop procrastinating!
 respond :: Func
-respond str = mwhenPrivileged $ do
+respond str = do
     dir <- fmap stConfDir readConfig
     let m = A.maybeResult . flip A.feed "" $ A.parse parsematch str
     flip (maybe $ pure "") m $ \(mat, ins, str') -> do
-        let (ns, string) = fmap T.unpack . bisect (== ' ') $ T.pack str'
-            n = maybe 10 id $ readMay (T.unpack ns) :: Int
+        let (ns, str'') = fmap T.unpack . bisect (== ' ') $ T.pack str'
+            n :: Int
+            (n, string) = maybe (10, str') (,str'') $ readMay (T.unpack ns)
             f = if null $ dropWhile (== ' ') string
                 then Nothing
                 else Just (ins, n, string)
@@ -744,9 +735,9 @@ respond str = mwhenPrivileged $ do
 -- FIXME restarting takes a while, is probably because of STM
 -- | Restart the bot.
 restart :: Func
-restart _ = mwhenUserStat (== Root) $ do
+restart _ = do
     tmvars <- M.elems . stConfServs <$> readConfig
-    !hs <- forM tmvars $ \t -> do
+    hs <- fmap (map (id $!)) . forM tmvars $ \t -> do
         verb "Reading TMVar..."
         c <- liftIO (atomically $ readTMVar t)
         verb "TMVar read."
@@ -827,8 +818,6 @@ sleep str = do
         Just n -> liftIO $ threadDelay $ fromEnum $ 10^6*n
         _ -> return ()
 
--- XXX check, recursively, if a function refers to itself somehow and avoid
---     recursion.
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Func
 store str = do
@@ -839,16 +828,14 @@ store str = do
     mlfuncs <- readLocalStored "letfuncs" :: Mind (Maybe (Map Text Text))
     let lfuncs = maybe mempty id mlfuncs
         isStored = M.member name lfuncs
-    verb "isRecursive?"
-    isR <- isRecursive name func lfuncs
-    when isR $ erro $ "Recursive function `" <> name <> "', `" <> func <> "`"
-    munless isR $ do
-        let inserter f = if T.null $ T.strip func
-                         then M.delete name
-                         else M.insert name f
-        mvoid . when (isStored || not isFunc) $ do
-            mapConfig $ \c -> c { stConfFuncs = inserter f $ stConfFuncs c }
-            mvoid $ modLocalStored "letfuncs" $ inserter func
+        inserter f = if T.null $ T.strip func
+                     then M.delete name
+                     else M.insert name f
+    mvoid . when (isStored || not isFunc) $ do
+        mapConfig $ \c -> c {
+            stConfFuncs = inserter (Funk func f Online) $ stConfFuncs c
+        }
+        mvoid $ modLocalStored "letfuncs" $ inserter func
   where
     (name, func) = first T.toLower $ bisect (== ' ') str
 
@@ -930,6 +917,12 @@ urbandict str = do
     let burl = "http://api.urbandictionary.com/v0/define?term="
     jsonStr <- httpGetString (burl ++ T.unpack str)
     let result = decode jsonStr :: Result (JSObject JSValue)
+--        mtext = maybe warning return . runMaybeT $ do
+--            mr <- hush $ resultToEither result
+--            list <- lookup "list" $ fromJSObject mr
+--            defs <- atMay list 0
+--            def <- lookup "definition" $ fromJSObject defs
+--            Just $ fromJSString
     etext <- try $ return $! (\(Ok x) -> x) $ fromJSString
         . (\(JSString x) -> x)
         . fromJust
@@ -941,11 +934,11 @@ urbandict str = do
         . lookup "list"
         . fromJSObject
         <$> result
-    text <- either warnShow return etext
+    text <- either (const $ return mempty) return etext
     mwhen (not $ null text) $ do
         return $ str <> ": " <> T.replace "\n" " | " (T.pack text)
-  where
-    warnShow x = warn x >> return ""
+--  where
+--    warning = warn "Parse error in `urbandict' JSON" >> return ""
 
 -- | Print the channel's userlist.
 userlist :: Func

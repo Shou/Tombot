@@ -46,6 +46,7 @@ import System.Directory (copyFile, removeFile)
 import System.IO (hClose, openTempFile, Handle)
 import System.Timeout (timeout)
 
+import Text.JSON
 import Text.XML.Light
 -- }}}
 
@@ -61,6 +62,8 @@ manyTillKeep p end = scan ([], [])
     snoc xs x = xs `mappend` [x]
 
 -- | Parse something in between two `Char's. Does not consume the last `Char'.
+--
+-- Note that a backward slash will escape the `Char'.
 inside :: Char -> Parser String
 inside x = A.many' $ escesc <|> escape x <|> A.notChar x
   where
@@ -307,6 +310,10 @@ unlessBanned m = whenStat (either (const False) (/= Banned)) m
 origNick :: User -> Text
 origNick = CI.original . userNick
 
+-- | From a list of tri-tuple funcs to Funks
+toFunks :: [(Text, Func, UserStatus)] -> Map Text Funk
+toFunks = M.fromList . map (\(n, f, s) -> (n, Funk n f s))
+
 -- }}}
 
 -- {{{ Decide utils
@@ -389,6 +396,24 @@ colourise t = foldr ($) t (openers ++ closers)
     closer c = T.replace (T.pack [c]) (T.cons c "\ETX")
     openers = map opener "[("
     closers = map closer "])"
+
+-- TODO
+-- | Get the API key for a service.
+getAPIKey :: Text -> Mind Text
+getAPIKey t = do
+    dir <- stConfDir <$> readConfig
+    --keys <- readConf $ dir <> "api"
+    return undefined
+
+-- }}}
+
+-- {{{ Funks utils
+
+-- FIXME Funk max should be customizable.
+funky :: Funky a -> Mind a
+funky m = do
+    s <- get
+    fmap fst . runStateT m $ StFunk 0 39
 
 -- }}}
 
@@ -559,6 +584,22 @@ adaptWith chan nick name host f = do
                 else Left user
     sets $ \c -> c { currDest = edest, currUser = user }
     modUserlist $ f user
+
+-- }}}
+
+-- {{{ JSON utils
+
+resultMay (Ok x) = Just x
+resultMay _ = Nothing
+
+objectMay (JSObject x) = Just x
+objectMay _ = Nothing
+
+stringMay (JSString x) = Just x
+stringMay _ = Nothing
+
+arrayMay (JSArray x) = Just x
+arrayMay _ = Nothing
 
 -- }}}
 

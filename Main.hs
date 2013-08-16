@@ -28,8 +28,6 @@ import System.IO
 -- }}}
 
 -- XXX
--- - We are going to rename the bot?
---      - A name without `bot' in it.
 -- - Store data as pure Haskell code in files, specifically for the Funcs.
 --      - This means we don't need to make parsers and whatnot, we already have
 --        GHC for that through Language.Haskell.Interpreter.
@@ -52,11 +50,11 @@ import System.IO
 --        version of their server by using tricks like these to prevent the
 --        connection from dropping googling for mud and "copy-over" should find
 --        some relevant results.
+-- - Change to event based system instead?
 
 -- TODO
 -- - Functions
 --      - About
---      - .r or .reload for reloading modules.
 -- - Rejoin on Handle error
 --      - Search for hPutStr and the likes
 --      - Close Handles on reconnection.
@@ -94,6 +92,17 @@ import System.IO
 -- - Difference operator, `\\'
 -- - :write and :read
 -- - Rewrite `compile' and use StateT/EitherT
+-- - Per channel logging status
+-- - `Outside' StateT monad that reads from a TMVar.
+--      - I assume this has something to do with lessening reads?
+--          - Yes, execute things but keep the TMVar available, then update the
+--            data once it finishes executing that, i.e. Funcs.
+--              - Make an instance for this too.
+-- - 4chan searching
+--      - If only one matching thread, print its information.
+--          - Prerequisite to this is to allow ID searching.
+-- - Now playing; Last.fm
+-- - Haskell evaluator; mueval
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -120,10 +129,25 @@ import System.IO
 -- - Function data, keeping the state of the functions.
 --      - Recursion counter
 --      - Function permissions
--- - onMatch priority system using integers.
 -- - We can use Attoparsec to parse pseudo-types that are within strings.
 --      - This might be helpful when validating functions.
 -- - Lessen the amount of reads/writes from the TMVar
+--      - We can run many functions without reading/writing from/to the TMVar,
+--        just like that~
+--          - For example `echo'.
+--          - Readers usually(?) don't need to read directly from the TMVar.
+--          - Setters need to write directly to the TMVar.
+-- - Privilege system rewrite.
+--      - Changeable privileges.
+--      - Privilege checking function inside the Func, which checks the Func's
+--        associated UserStatus value.
+--          - This means all Funcs are `Online' by default, but functions that
+--            have some setter, for example, will have another privilege when
+--            given an argument.
+--          - Use `funcs' if you want to blacklist a whole function.
+-- - ChanStat commands are not to be used through the bot.
+--      - add a filter on the bot's output.
+-- - Cannot use :let defined commands in other :let and other things, like :eval
 
 -- REVIEW
 -- - Keep track of UserStat
