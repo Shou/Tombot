@@ -1,6 +1,10 @@
 Tombot
 ======
 
+<a href=https://pie-likes-me.deviantart.com/art/IRC-Bot-Tombot-but-coloured-401413502>
+<img src=http://i.imgur.com/7ssPES7.png>
+</a>
+
 This is the successor to [KawaiiBot-hs](https://github.com/Shou-/KawaiiBot-hs).
 Tombot, a mix of "tomboy" and "bot", is an IRC bot that does useless things,
 such as grabbing information about anime and manga, having its own small
@@ -97,10 +101,6 @@ Add a reminder for someone; printed on join.<br>
 * `us`
 Userlist printing function.<br>
 
-* `gay`
-Colour a string with the rainbow.<br>
-`gay <string>` `:gay Lesbian Gay Bi Trans`
-
 * `len`
 Length of a string.<br>
 `len <string>` `:us -> len`
@@ -187,8 +187,6 @@ Add a new bot event. `admin`<br>
 Display or change the channel's function list. `op`<br>
 `funcs [Whitelist [<string> ...] | Blacklist [<string> ...]]` `funcs Blacklist`
 
-* `greet`
-
 * `kanji`
 Display the definitions of a kanji.<br>
 `kanji <string>` `:kanji 氷`
@@ -238,31 +236,31 @@ Print the words in reverse order.<br>
 ## Operators
 * `->`
 Pipe, it appends the output of the function on the left into the function on the right.<br>
-`.> Hi! -> gay `
+`.> Hi! -> ra Bye!|` - Pipe into next command, before it runs.
 
 * `<-`
 The opposite of `->`.<br>
-`:> This is a cool city: ++ gay <- ra Tokyo|Oslo|Madrid`
+`:ra Oslo is the worst.|The best: <- ra Tokyo|Oslo|Madrid` - Pipe into previous command, before it runs.
 
 * `++`
 Add, it appends the string of the output on the right to the output on the left.<br>
-`.lewd ++ .lewd`
+`.lewd ++ .lewd` - 
 
 * `>>`
 Execute the first function, disregard the output and continue.<br>
-`:tell Fogun Did you watch Gargantia yet? >> tell lunar Hi!`
+`:tell Fogun Did you watch Gargantia yet? >> tell lunar Hi!` - Disregard `tell`'s output because it outputs nothing.
 
 * `<>`
 Or; return whatever function's result isn't empty. `Lazy`<br>
-`:ra You're safe for now| <> b John`
+`:ra You're safe for now| <> b John` - Only ban John when `ra` returns an empty value.
 
 * `><`
 And; return the right function's output only if both functions return something. `Lazy`<br>
-`:ra You're dead, kid!| >< b John`
+`:ra You're dead, kid!| >< b John` - Only ban John when `ra` returns `You're dead kid!`
 
 * `+>`
 And append; return both functions' outputs appended only if both return something. `Lazy`<br>
-`:on /(https?://\S+)/i :> Title: +> title \1`
+`:> Title: +> title http://github.com/` - only output and append when the bot successfully fetches Github's website title.
 
 ## Function config files
 
@@ -282,10 +280,6 @@ This is the file that is filled with ons from the `on` function, which are
 regex matches and the Kawaiilang to run on match.
 
 * `letfuncs`
-
-* `britify`
-
-* `cutify`
 
 
 ⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨
