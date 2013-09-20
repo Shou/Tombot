@@ -40,8 +40,9 @@ connecter host port nick name = liftIO $ connecter' 0
   where
     connecter' :: Int -> IO Handle
     connecter' n = E.handle (onerror n) $ do
-        verb $ "Connection delay by " <> show n <> " seconds"
-        threadDelay (10^6 * n)
+        unless (n < 1) $ do
+            verb $ "Connection delay by " <> show n <> " seconds"
+            threadDelay (10^6 * n)
         mh <- timeout (10^7) $ do
             h <- connectTo host $ PortNumber port
             te <- mkTextEncoding "UTF-8//TRANSLIT"
@@ -50,7 +51,6 @@ connecter host port nick name = liftIO $ connecter' 0
             hSetNewlineMode h (NewlineMode CRLF CRLF)
             T.hPutStrLn h $ "NICK " <> nick
             T.hPutStrLn h $ "USER " <> name <> " 0 * :" <> name
-            T.hPutStrLn h $ "CAP REQ :multi-prefix"
             return h
         maybe (connecter' $ inctime n) pure mh
     inctime n = min 300 $ max n 1 * 2

@@ -189,8 +189,7 @@ fullCmd fs = do
   where
     lefts = ["eval", "event", "help", "let", "on", "re"]
 
--- TODO figure out how ++ keeps spaces but not <- and ->
---      - The parser strips spaces at the end, that's how. Get rid of that.
+-- FIXME check Funk Stat
 -- TODO clean up and split this function
 -- | Compile `KawaiiLang' into `IO Text'.
 compile :: Map Text Funk -> KawaiiLang -> Mind Text
@@ -252,7 +251,8 @@ compile funcs = funky . klToText mempty
             flip (maybe $ return mempty) (M.lookup name funcs) $ \f -> do
                 fu <- get
                 if stFunkRecs fu < stFunkMax fu then do
-                    t <- lift $ funkFunc f args
+                    t <- lift $ mwhenPrivTrans (funkStat f) $ do
+                        funkFunc f args
                     put $ StFunk (stFunkRecs fu + 1) (stFunkMax fu)
                     klToText (old <> t) kl
                 else return "pls no recursive functions"

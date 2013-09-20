@@ -307,9 +307,11 @@ logPriv (Privmsg nick name host dest text) = do
     host <- stServHost . currServ <$> see
     time <- fmap T.pack . liftIO $ do
         formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" <$> getCurrentTime
-    let path = logPath <> host <> " " <> T.unpack dest
+    let path = logPath <> host <> " " <> T.unpack dest'
         msg = T.cons '\n' $ T.intercalate "\t" [time, CI.original nick, text]
     appendFileSafe path msg
+  where
+    dest' = T.replace "/" "." dest
 
 -- }}}
 
@@ -401,6 +403,7 @@ welcomeNum _ = do
     forM_ cs $ \c -> when (stChanAutoJoin c) $ do
         write $ "JOIN " <> stChanName c
     let mpass = stServNickServId server
+    write $ "CAP REQ :multi-prefix"
     flip (maybe $ return ()) mpass $ \pass -> do
         putPrivmsg "NickServ" $ "identify " <> pass
 
@@ -444,7 +447,8 @@ userlistNum (Numeric n ma t) = do
                 mu' = flip fmap mu $ \u -> u { userStat = stat }
                 user = fromJust $ mu' <|> Just (User nick "" "" stat chans)
             modUserlist $ M.insert nick user
-            --write $ "WHOIS " <> nick
+            when (stat > Online) $ return ()
+                --putPrivmsg $ "nickserv status " <> CI.original nick
 
 -- |
 modeNum :: IRC -> Mind ()

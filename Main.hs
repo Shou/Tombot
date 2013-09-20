@@ -101,7 +101,6 @@ import System.IO
 -- - 4chan searching
 --      - If only one matching thread, print its information.
 --          - Prerequisite to this is to allow ID searching.
--- - Now playing; Last.fm
 -- - Haskell evaluator; mueval
 
 -- FIXME

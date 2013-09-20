@@ -17,7 +17,7 @@ import Tombot.Utils
 import Tombot.Parser
 
 import Control.Applicative
-import Control.Arrow
+import Control.Arrow hiding (left, right)
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Error
@@ -35,6 +35,7 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
+import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -48,6 +49,7 @@ import System.Posix.Process (executeFile, exitImmediately)
 import System.Exit (ExitCode(ExitSuccess))
 import System.IO (hClose)
 import System.Random (randomRIO)
+import System.Process (readProcessWithExitCode)
 
 import Text.JSON
 import Text.Regex
@@ -59,60 +61,64 @@ import Text.XML.Light
 funcs :: Map Text Funk
 funcs = toFunks [ ("!", ddg, Online)
                 , ("b", ban, OP)
-                , ("me", me, Online)
                 , (">", echo, Online)
                 , ("<", priv, Online)
                 , ("k", kick, OP)
                 , ("m", mode, OP)
-                , ("ops", ops, Online)
-                , ("raw", raw, Root)
-                , ("sed", sed, Online)
                 , ("v", voice, OP)
+                , ("x", exchange, Online)
                 , ("^", findMsg, Online)
+                , ("me", me, Online)
+                , ("np", lastfm, Online)
                 , ("an", anime, Online)
                 , ("in", match, Online)
                 , ("ma", manga, Online)
                 , ("ai", airing, Online)
+                , ("hs", mueval, Online)
+                , ("ra", random, Online)
+                , ("re", remind, Online)
+                , ("kb", kickban, OP)
+                , ("on", respond, OP)
+                , ("us", userlist, OP)
+                , ("tr", translate, Online)
+                , ("ops", ops, Online)
+                , ("onf", frespond, Online)
+                , ("ons", responds, Online)
+                , ("raw", raw, Root)
+                , ("sed", sed, Online)
+                , ("len", count, Online)
+                , ("let", store, Online)
+                , ("urb", urbandict, Online)
                 , ("bots", bots, Online)
                 , ("eval", eval, Online)
                 , ("help", help, Online)
                 , ("hist", history, Online)
                 , ("host", host, Online)
-                , ("hs", mueval, Online)
                 , ("http", http, Online)
                 , ("isup", isup, Online)
                 , ("kill", kill, Admin)
-                , ("len", count, Online)
-                , ("let", store, Online)
                 , ("name", name, Online)
                 , ("nick", nick, Online)
                 , ("quit", quit, Admin)
-                , ("ra", random, Online)
-                , ("re", remind, Online)
                 , ("stat", stat, Online)
                 , ("tell", tell, Online)
                 , ("wiki", wiki, Online)
-                , ("funcs", list, Online)
-                , ("kb", kickban, OP)
-                , ("on", respond, OP)
+                , ("show", reveal, Online)
+                , ("join", chanjoin, Online)
+                , ("part", partchan, OP)
+                , ("verb", verbosity, Admin)
                 , ("cjoin", cjoin, Online)
                 , ("event", event, Admin)
+                , ("fstat", fstat, OP)
+                , ("funcs", list, Online)
                 , ("kanji", kanji, Online)
                 , ("nicks", nicks, Admin)
                 , ("sleep", sleep, Online)
                 , ("title", title, Online)
                 , ("topic", topic, Online)
-                , ("show", reveal, Online)
-                , ("us", userlist, OP)
-                , ("tr", translate, Online)
                 , ("cajoin", cajoin, Online)
-                , ("join", chanjoin, Online)
-                , ("part", partchan, OP)
                 , ("prefix", prefix, Online)
-                , ("reload", reload, Root)
                 , ("romaji", romaji, Online)
-                , ("urb", urbandict, Online)
-                , ("verb", verbosity, Admin)
                 , ("reverse", rwords, Online)
                 , ("restart", restart, Root)
                 , ("connect", connectIRC, Admin)
@@ -258,16 +264,20 @@ cjoin str = do
         return ""
 
 -- FIXME !bang my ANUS
+-- XXX should work now, test it
 -- | DuckDuckGo !bang search.
 ddg :: Func
 ddg str = do
     let burl = ("https://api.duckduckgo.com/?format=json&q=!" <>)
     headers <- httpHead $ burl $ urlEncode $ T.unpack str
-    verb headers
-    let ferurl = maybe "" T.pack $ M.lookup "Location" headers
-        (_, eurl) = snd . bisect (== '=') <$> bisect (== '=') ferurl
-        rurl = T.pack $ urlDecode $ T.unpack eurl
-    return rurl
+    let json = maybe "" id $ M.lookup "X-Response-Body-Start" headers
+        mres :: Maybe (JSObject JSValue)
+        mres = resultMay $ decode json
+        mx = do
+            o <- mres
+            s <- lookup "Redirect" $ fromJSObject o
+            fromJSString <$> stringMay s
+    return $ maybe "" T.pack mx
 
 -- XXX What purpose does this serve now?
 --      - Perhaps we can use it for the planned `load' function.
@@ -291,6 +301,7 @@ eval str = do
     funcs <- stConfFuncs <$> readConfig
     botparse funcs str >>= compile funcs
 
+-- TODO time argument
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = do
@@ -298,7 +309,7 @@ event str = do
     kill name
     tid <- forkMi $ whileAlive $ do
         funcs <- stConfFuncs <$> readConfig
-        kl <- botparse funcs t
+        kl <- botparse funcs kl
         when (kl == mempty) $ void $ kill name
         t <- compile funcs kl
         putPrivmsg d t
@@ -311,7 +322,9 @@ event str = do
           }
     return ""
   where
-    (name, t) = bisect (== ' ') str
+    (name, str') = bisect (== ' ') str
+    (tim, kl) = bisect (== ' ') str'
+    time = readDef 300 (T.unpack tim) :: Int
     whileAlive m = do
         evs <- sees $ stServThreads . currServ
         if M.member name evs
@@ -319,6 +332,24 @@ event str = do
         else do
             let evs' = M.delete name evs
             sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
+
+-- | Currency exchange function.
+exchange :: Func
+exchange str = do
+    let url = [ "http://rate-exchange.appspot.com/currency?from=" <> T.unpack a
+              , "&to=" <> T.unpack b
+              ]
+    jsonStr <- httpGetString $ concat url
+    let mres :: Maybe (JSObject JSValue)
+        mres = resultMay $ decode jsonStr
+        mdubz :: Maybe Float
+        mdubz = do
+            o <- mres
+            join . fmap floatMay . lookup "rate" $ fromJSObject o
+    return $ maybe "" (T.pack . show . (x *)) mdubz
+  where
+    (x, str') = first (read . T.unpack) $ bisect (== ' ') str
+    (a, b) = bisect (== ' ') str'
 
 -- | Alias for `history' and only returning the message.
 findMsg :: Func
@@ -329,7 +360,22 @@ findMsg str = onlyMsg <$> history str
 -- TODO
 -- | Function Stat return/change.
 fstat :: Func
-fstat str = return ""
+fstat str = do
+    mfunc <- M.lookup tfun . stConfFuncs <$> readConfig
+    mmaybe mfunc $ \f -> do
+        let stat = funkStat f
+        if T.null tsta
+        then do
+            return . T.pack $ show stat
+        else mmaybe mstat $ \s -> do
+            let f' = f { funkStat = s }
+            mwhenPrivTrans stat $ mwhenPrivTrans s $ mapConfig $ \c ->
+                c { stConfFuncs = M.insert tfun f' $ stConfFuncs c }
+            return ""
+  where
+    (tfun, tsta) = bisect (== ' ') str
+    mstat = readMay $ T.unpack tsta
+    mmaybe = flip $ maybe $ return mempty
 
 -- TODO nth result argument
 -- | Kanji lookup function.
@@ -337,24 +383,32 @@ kanji :: Func
 kanji str = do
     let burl = "http://www.csse.monash.edu.au/~jwb/cgi-bin/wwwjdic.cgi?1ZUR"
         url = burl <> urlEncode (T.unpack str)
-    dict <- lines <$> httpGetString url
-    let s = T.intercalate "; " . map T.pack . take 2 $ dict
+    res <- httpGetString url
+    let html = fromMaybeElement $ parseXMLDoc res
+        qbody = QName "BODY" Nothing Nothing
+        body = fromMaybeElement $ findElement qbody html
+        text = take 2 . filter (/= "") . lines $ elemsText body
+        s = T.intercalate "; " . map T.pack $ text
+    verb body
     return s
 
 -- | Kick a user.
 kick :: Func
 kick str = do
     edest <- sees $ currDest
-    let e = flip fmap edest $ write . fullkick
+    let e = flip fmap edest $ kicks
     either (const $ return "") (>> return "") e
   where
     (nicks', txt) = T.break (== ':') str
-    nicks = T.intercalate "," $ T.words nicks'
-    fullkick c = "KICK " <> stChanName c <> " " <> nicks <> " " <> txt
+    nicks = T.words nicks'
+    fullkick n c = write $ "KICK " <> stChanName c <> " " <> n <> " " <> txt
+    kicks c = forM_ nicks $ \n -> fullkick n c
 
 -- | Kick and ban a user.
 kickban :: Func
-kickban str = mvoid $ mapM_ ($ str) [ban, kick]
+kickban str = do
+    ban $ T.takeWhile (/= ':') str
+    mvoid $ kick str
 
 -- | Kill an event
 kill :: Func
@@ -367,6 +421,7 @@ kill str = mwhenPrivileged $ do
         sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
         return $ "Killed event `" <> str <> "'"
 
+-- TODO
 -- | Connect to an IRC server.
 connectIRC :: Func
 connectIRC str = do
@@ -375,10 +430,22 @@ connectIRC str = do
     -- But if Nothing then make a new Server and connect. Fork a new thread.
     case mtc of
         Just tc -> return ()
-        Nothing -> return ()
+        Nothing -> do
+            c <- get
+            cs <- sees currServ
+            let bns = stServBotNicks cs
+                bna = stServBotName cs
+                s = defStServ { stServHost = host
+                              , stServPort = port
+                              , stServBotNicks = bns
+                              , stServBotName = bna
+                              }
+            --initialise c s
+            return ()
     return ""
   where
-    (host, port) = first T.unpack $ bisect (== ' ') str
+    (host, sport) = first T.unpack $ bisect (== ' ') str
+    port = fromIntegral . readDef 6667 $ T.unpack sport
 
 -- | Count characters.
 count :: Func
@@ -389,19 +456,62 @@ count str = return $ T.pack . show $ T.length str
 -- | Last.fm user get recent track
 lastfm :: Func
 lastfm str = do
-    apikey <- getAPIKey "lastfm"
+    mkey <- getAPIKey "lastfm"
+    verb mkey
     let url = [ "http://ws.audioscrobbler.com/2.0/"
               , "?method=user.getrecenttracks"
-              , "&user=icedtidus"
-              , "&api_key=" <> T.unpack apikey
+              , "&user=" <> T.unpack str
+              , "&api_key=" <> T.unpack (maybe "" id mkey)
               , "&limit=1&extended=1&format=json"
               ]
     jsonStr <- httpGetString $ concat url
-    let mresult = decode jsonStr :: Result (JSObject JSValue)
---        x = runMaybeT $ do
---                obj <- mresult
---                return obj
-    return ""
+    let mres :: Maybe (JSObject JSValue)
+        mres = resultMay $ decode jsonStr
+        -- TODO split this up, if Nothing on any it returns Nothing
+        morcs = do
+            o <- mres
+            jorcs <- lookup "recenttracks" $ fromJSObject o
+            fromJSObject <$> objectMay jorcs
+        user = do
+            orcs <- morcs
+            jours <- lookup "@attr" orcs
+            ours <- fromJSObject <$> objectMay jours
+            jsuser <- lookup "user" ours
+            fromJSString <$> stringMay jsuser
+        mtr = do
+            orcs <- morcs
+            trs <- join . fmap arrayMay $ lookup "track" orcs
+            fmap fromJSObject . join . fmap objectMay $ trs `atMay` 0
+        bnp = maybe False id $ do
+            tr <- mtr
+            jars <- lookup "@attr" tr
+            ars <- fromJSObject <$> objectMay jars
+            sb <- join . fmap stringMay $ lookup "nowplaying" ars
+            return $ fromJSString sb == "true"
+        np = if bnp then " ▸" else ""
+        artist = maybe "" id $ do
+            tr <- mtr
+            jart <- lookup "artist" tr
+            art <- fromJSObject <$> objectMay jart
+            jartist <- lookup "name" art
+            fromJSString <$> stringMay jartist
+        blove = maybe False id $ do
+            tr <- mtr
+            jlove <- lookup "loved" tr
+            (== "1") . fromJSString <$> stringMay jlove
+        love = if blove then "\ETX13♥\ETX" else "\ETX10♫\ETX"
+        title = maybe "" id $ do
+            tr <- mtr
+            jtitle <- lookup "name" tr
+            fromJSString <$> stringMay jtitle
+
+    verb mtr
+    verb blove
+
+    mwhen (length title > 0) $ do
+        return . T.pack $ unwords [ love <> np, title, "\ETX06●\ETX", artist ]
+  where
+    uni x = read "\"" <> x <> "\""
 
 -- | List the available Funcs.
 list :: Func
@@ -579,22 +689,25 @@ mode str = mwhenPrivileged $ do
     (m, s) = T.break (== ' ') $ T.strip str
     fullmode c = "MODE " <> stChanName c <> " " <> m <> " " <> s
 
--- | Set the channel mode, prepending a +.
-modeplus :: Func
-modeplus str = mode $ "+" <> str
-
--- | Set the channel mode, prepending a -.
-modeminus :: Func
-modeminus str = mode $ "-" <> str
-
 mueval :: Func
 mueval str = do
-    -- FIXME hardcoded filepath is bad
     let file = "Start.hs"
-        args = [ "-t", "5", "-r", "-n", "-l", file, "-e", T.unpack str ]
-    mkv <- liftIO $ executeFile "mueval" True args Nothing
-    let t = T.pack . show $ (mkv :: String)
-    return t
+        args = [ "-t", "5", "-n", "-i", "-l", file, "-XOverloadedStrings"
+               , "-XTupleSections", "-XDoAndIfThenElse", "-XBangPatterns"
+               , "-e", T.unpack str'
+               ]
+    (xc, sto, ste) <- liftIO $ readProcessWithExitCode "mueval" args ""
+    let out = if length (lines sto) == 3
+              then lines sto !! 2
+              else intercalate "; " $ lines sto
+        outType = if length (lines sto) == 3
+                  then lines sto !! 1
+                  else intercalate "; " $ lines sto
+        result = if isTypeOf then outType else out
+    return . T.pack $ result
+  where
+    isTypeOf = T.isPrefixOf ":t" str
+    str' = if isTypeOf then T.drop 2 str else str
 
 -- | The current user's name
 name :: Func
@@ -731,6 +844,38 @@ respond str = do
                 then Nothing
                 else Just (ins, n, string)
         mvoid . modLocalStored "respond" $ M.alter (const f) mat
+
+responds :: Func
+responds  str = do
+    mons <- readLocalStored $ "respond"
+    let ons :: [(String, (Bool, Int, String))]
+        ons = sortBy (comparing $ snd3 . snd) $ maybe mempty M.toList mons
+    ons' <- flip filterM ons $ \(match, (ins, n, resp)) -> deci . decide $ do
+        let regex = mkRegexWithOpts match False ins
+        emins <- try $ return $! matchRegex regex $ T.unpack str
+        when (isLeft emins) $ do
+            verb ("onMatch: " <> show emins)
+            left False
+        let mins = either (const $ Just []) id emins
+        unless (isJust mins) $ left False
+        right True
+    return . T.pack . intercalate ", " . map wrap . map fst $ ons'
+  where
+    replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
+    deci :: Mind (Either Bool Bool) -> Mind Bool
+    deci m = m >>= return . either id id
+    wrap t = "/" <> t <> "/"
+
+frespond :: Func
+frespond str = do
+    mons <- readLocalStored "respond"
+    let mon :: Maybe (Bool, Int, Text)
+        mon = join $ M.lookup str <$> mons
+        on = maybe "" trd mon
+    return on
+  where
+    key = T.init . T.tail $ str
+    trd (_, _, x) = x
 
 -- FIXME restarting takes a while, is probably because of STM
 -- | Restart the bot.
@@ -916,27 +1061,17 @@ urbandict :: Func
 urbandict str = do
     let burl = "http://api.urbandictionary.com/v0/define?term="
     jsonStr <- httpGetString (burl ++ T.unpack str)
-    let result = decode jsonStr :: Result (JSObject JSValue)
---        mtext = maybe warning return . runMaybeT $ do
---            mr <- hush $ resultToEither result
---            list <- lookup "list" $ fromJSObject mr
---            defs <- atMay list 0
---            def <- lookup "definition" $ fromJSObject defs
---            Just $ fromJSString
-    etext <- try $ return $! (\(Ok x) -> x) $ fromJSString
-        . (\(JSString x) -> x)
-        . fromJust
-        . lookup "definition"
-        . fromJSObject
-        . (\(JSObject x) -> x )
-        . (!! 0) . (\(JSArray xs) -> xs)
-        . fromJust
-        . lookup "list"
-        . fromJSObject
-        <$> result
-    text <- either (const $ return mempty) return etext
-    mwhen (not $ null text) $ do
-        return $ str <> ": " <> T.replace "\n" " | " (T.pack text)
+    let mres :: Maybe (JSObject JSValue)
+        mres = resultMay $ decode jsonStr
+        def = maybe "" id $ do
+            o <- mres
+            jlist <- lookup "list" $ fromJSObject o
+            jarr <- join . fmap (`atMay` 0) $ arrayMay jlist
+            ar <- fromJSObject <$> objectMay jarr
+            jdef <- lookup "definition" ar
+            fromJSString <$> stringMay jdef
+    mwhen (not $ null def) $ do
+        return $ str <> ": " <> T.replace "\n" " | " (T.pack def)
 --  where
 --    warning = warn "Parse error in `urbandict' JSON" >> return ""
 

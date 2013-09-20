@@ -305,6 +305,11 @@ mwhenPrivileged = mwhenStat (either isMod (>= OP))
 mwhenUserStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
 mwhenUserStat p = mwhenStat (either (const False) p)
 
+mwhenPrivTrans :: Monoid a => UserStatus -> Mind a -> Mind a
+mwhenPrivTrans u = mwhenStat (either isPriv (>= u))
+  where
+    isPriv = if u >= OP then isMod else const False
+
 unlessBanned :: Mind () -> Mind ()
 unlessBanned m = whenStat (either (const False) (/= Banned)) m
 
@@ -400,11 +405,11 @@ colourise t = foldr ($) t (openers ++ closers)
 
 -- TODO
 -- | Get the API key for a service.
-getAPIKey :: Text -> Mind Text
+getAPIKey :: Text -> Mind (Maybe Text)
 getAPIKey t = do
     dir <- stConfDir <$> readConfig
-    --keys <- readConf $ dir <> "api"
-    return undefined
+    keys <- readConf $ dir <> "api"
+    return . join $ M.lookup t <$> keys
 
 -- }}}
 
@@ -613,6 +618,15 @@ stringMay _ = Nothing
 arrayMay (JSArray x) = Just x
 arrayMay _ = Nothing
 
+boolMay (JSBool x) = Just x
+boolMay _ = Nothing
+
+intMay (JSRational _ x) = Just $ round x
+intMay _ = Nothing
+
+floatMay (JSRational _ x) = Just $ fromRational x
+floatMay _ = Nothing
+
 -- }}}
 
 -- {{{ Maybe utils
@@ -621,6 +635,9 @@ arrayMay _ = Nothing
 maybeToMonoid :: Monoid a => Maybe a -> a
 maybeToMonoid (Just x) = x
 maybeToMonoid Nothing = mempty
+
+mayT :: Monad m => Maybe a -> MaybeT m a
+mayT = maybe (fail "") return
 
 -- }}}
 

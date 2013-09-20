@@ -31,6 +31,7 @@ Executable tombot
         mtl,
         network,
         old-locale,
+        process,
         random,
         regex-compat,
         stm,
