@@ -1,10 +1,6 @@
 Tombot
 ======
 
-<a href=https://pie-likes-me.deviantart.com/art/IRC-Bot-Tombot-but-coloured-401413502>
-<img src=http://i.imgur.com/7ssPES7.png>
-</a>
-
 This is the successor to [KawaiiBot-hs](https://github.com/Shou-/KawaiiBot-hs).
 Tombot, a mix of "tomboy" and "bot", is an IRC bot that does useless things,
 such as grabbing information about anime and manga, having its own small
