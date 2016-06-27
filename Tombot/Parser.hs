@@ -24,6 +24,7 @@ import Control.Error
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.State
+import Control.Monad.Trans.Either (left)
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
@@ -155,7 +156,7 @@ oper = Oper <$> A.choice strs <*> pure Kempty
 
 inParens :: [Text] -> Parser KawaiiLang
 inParens fs = do
-    (cs, op) <- "(" A..*> manyTillKeep A.anyChar end
+    (cs, op) <- "(" *> manyTillKeep A.anyChar end
     let cs' = T.pack cs
         kls = A.parse (limbs fs) cs'
     return $ Parens (resultToKL kls) (either (const Kempty) id op)
@@ -427,7 +428,7 @@ numeric = do
     num <- A.takeWhile1 (`elem` ['0' .. '9'])
     A.space
     A.takeWhile (/= ' ')
-    A.skipWhile (`elem` "*=@ ")
+    A.skipWhile (`elem` ['*', '=', '@'])
     c <- fmap T.stripEnd <$> cmd
     text <- (A.try $ colonText) <|> pure ""
     return $ Numeric num c text

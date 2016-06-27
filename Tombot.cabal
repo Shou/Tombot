@@ -14,6 +14,7 @@ Executable tombot
     GHC-Options:
         -threaded
     Build-Depends:
+        aeson,
         attoparsec,
         bytestring,
         base,
@@ -22,12 +23,12 @@ Executable tombot
         directory,
         either,
         errors,
+        hashmap,
         hint,
         HTTP,
-        http-conduit,
-        http-conduit-browser,
         http-types,
         json,
+        lens,
         mtl,
         network,
         old-locale,
@@ -37,8 +38,10 @@ Executable tombot
         stm,
         text,
         time,
-        unix == 2.5.1.0,
         utf8-string,
+        websockets,
+        wreq,
+        wuss,
         xml
     Main-Is:
         Main.hs

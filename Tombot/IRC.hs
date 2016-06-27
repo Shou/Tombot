@@ -22,6 +22,7 @@ import Control.Error
 import Control.Exception (SomeException)
 import qualified Control.Exception as E
 import Control.Monad.State
+import Control.Monad.Trans.Either (left, right)
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
@@ -34,9 +35,8 @@ import Data.Monoid
 import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Time (formatTime, getCurrentTime)
+import Data.Time (formatTime, getCurrentTime, defaultTimeLocale)
 
-import System.Locale (defaultTimeLocale)
 import System.Random (randomRIO)
 
 import Text.Regex
@@ -172,7 +172,7 @@ changeMode :: IRC -> Mind ()
 changeMode (Mode nick name host chan chars mtext) =
     mode chars $ maybe [] T.words mtext
   where
-    usermodes = "vhoaq"
+    usermodes = "vhoaq" :: String
     mode ('+':xs) ys = plus xs ys
     mode ('-':xs) ys = minus xs ys
     mode _ _ = return ()
@@ -437,7 +437,7 @@ userlistNum (Numeric n ma t) = do
     flip (maybe $ noNumeric "353") ma $ \chan -> do
         musers <- join . fmap (M.lookup host) <$> readConf (dir <> "UserStats")
         forM_ (T.words t) $ \modenick -> do
-            let (ircmode, nick) = CI.mk <$> T.break (`notElem` "~&@%+") modenick
+            let (ircmode, nick) = CI.mk <$> T.break (`notElem` ['~', '&','@', '%', '+']) modenick
                 mode = toMode (T.unpack ircmode)
                 users = stServUsers server
                 mu = mapChans (M.insert chan mode) <$> M.lookup nick users

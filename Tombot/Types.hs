@@ -8,6 +8,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module Tombot.Types where
 
@@ -35,9 +36,6 @@ import System.IO (Handle)
 -- XXX
 
 
--- TODO test this
-instance (Typeable s, Typeable1 m) => Typeable1 (StateT s m) where
-    typeOf1 _ = mkTyCon3 "mtl" "Control.Monad.State.Lazy" "StateT" `mkTyConApp` [typeOf (undefined :: s), typeOf1 (undefined :: m a)]
 
 instance Functor Allowed where
     fmap f (Blacklist a) = Blacklist $ f a

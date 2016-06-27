@@ -25,6 +25,7 @@ import Control.Exception (SomeException)
 import qualified Control.Exception as E
 import Control.Monad
 import Control.Monad.State
+import Control.Monad.Trans.Either (left, right)
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
@@ -45,11 +46,10 @@ import qualified Language.Haskell.Interpreter as H
 
 import Network.HTTP (urlDecode, urlEncode)
 
-import System.Posix.Process (executeFile, exitImmediately)
 import System.Exit (ExitCode(ExitSuccess))
 import System.IO (hClose)
 import System.Random (randomRIO)
-import System.Process (readProcessWithExitCode)
+import System.Process (readProcessWithExitCode, spawnCommand)
 
 import Text.JSON
 import Text.Regex
@@ -623,7 +623,7 @@ http str = do
 isup :: Func
 isup str = do
     let url = "http://" <> foldr (flip T.replace "") str ["https://", "http://"]
-    (_, _, status, _) <- httpGetResponse (T.unpack url)
+    (_, _, status) <- httpGetResponse (T.unpack url)
     return $ if isPrefixOf "2" status then "True" else "False"
 
 -- XXX what will the language look like?
@@ -889,8 +889,7 @@ restart _ = do
         return $! currHandle c
     forM_ hs (void . liftIO . try . hClose)
     liftIO $ do
-        executeFile "tombot" True [] Nothing
-        exitImmediately ExitSuccess
+        spawnCommand "tombot"
     return ""
 
 -- | Show StateT data.
@@ -1005,7 +1004,7 @@ tell str = do
 -- | Website title fetching function.
 title :: Func
 title str = do
-    (con, hed, _, _) <- httpGetResponse (T.unpack str)
+    (con, hed, _) <- httpGetResponse (T.unpack str)
     let respType = maybe "" id $ lookup "Content-Type" hed
     mwhen ("text/html" `isInfixOf` map toLower respType) $ do
         let xml = fromMaybeElement $ parseXMLDoc con
@@ -1133,7 +1132,7 @@ wiki str = do
         | isMulti text -> wiki $ T.pack atext
         | otherwise -> return . T.strip $ T.pack text
   where
-    isMulti t = any (`isSuffixOf` t) [ "may refer to:"
+    isMulti t = any (`isSuffixOf` t) [ "may refer to:" :: String
                                      , "can stand for:"
                                      ]
     attr t v = Attr (QName t Nothing Nothing) v

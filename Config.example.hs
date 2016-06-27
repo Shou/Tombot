@@ -29,13 +29,6 @@ freenode = Server { servHost = "irc.freenode.net"
                   , servNickServId = ""
                   }
 
-chanKawaiibot = Channel { chanName = "#kawaiibot"
-                        , chanJoin = True
-                        , chanAutoJoin = True
-                        , chanPrefix = ":"
-                        , chanFuncs = Blacklist []
-                        }
-
 rizon = Server { servHost = "irc.rizon.net"
                , servPort = 6667
                , servChans = [ chanKawaiibot

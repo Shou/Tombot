@@ -19,8 +19,10 @@ import Control.Concurrent.STM
 import Control.Error
 import Control.Exception (SomeException)
 import qualified Control.Exception as E
+import Control.Lens hiding (sets, inside)
 import Control.Monad
 import Control.Monad.State
+import Control.Monad.Trans.Either (EitherT(..))
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
@@ -39,9 +41,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
 import Network.HTTP (urlEncode)
-import Network.HTTP.Conduit
-import Network.HTTP.Conduit.Browser
 import Network.HTTP.Types.Status
+import qualified Network.Wreq as W
 
 import System.Directory (copyFile, removeFile)
 import System.IO (hClose, openTempFile, Handle)
@@ -52,7 +53,7 @@ import Text.XML.Light
 -- }}}
 
 version :: Text
-version = "Tombot 0.2.0 (the cute :3c)"
+version = "Tombot 0.3.0 (i'm not a boy)"
 
 -- {{{ Attoparsec utils
 
@@ -436,76 +437,36 @@ allfuncs = do
 
 -- {{{ HTTP utils
 
--- TODO
--- |
-httpGetResponse' :: MonadIO m => String -> m (String, [(CI String, String)], String, String)
-httpGetResponse' url = liftIO $ withManager $ \man -> do
-    initReq <- parseUrl url
-    let req = initReq { requestHeaders = useragent : requestHeaders initReq
-                      }
-    r <- httpLbs req man
-    let b = responseBody r
-        s = statusCode $ responseStatus r
-        v = responseVersion r
-        h = responseHeaders r
-    liftIO $ closeManager man
-    return $ ( BU.toString $ B.concat $ BL.toChunks b
-             , flip map h $ \(k, v) ->
-                (CI.map BU.toString k, BU.toString v)
-             , show s
-             , show v
-             )
-  where
-    useragent = ( "User-Agent"
-                , "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
-                )
+httpGetResponse :: MonadIO m => String
+                 -> m (String, [(CI String, String)], String)
+httpGetResponse url = liftIO $ do
+    r <- W.getWith opts url
+    let mbody = fmap toString $ r ^? W.responseBody
+        body = mayempty mbody
+        mstatus = fmap show (r ^? W.responseStatus) <> Just " \x2014 "
+        status = mayempty mstatus
+        bheaders = r ^. W.responseHeaders
+        headers = []
 
-httpGetResponse :: MonadIO m => String -> m (String, [(CI String, String)], String, String)
-httpGetResponse url = do
-    let tryGet = liftIO $ do
-            mr <- timeout (2 * 10 ^ 7) (try $ httpGetResponse' url)
-            return $ maybe (Left Nothing) (either (Left . Just) Right) mr
-    e <- tryGet
-    case e of
-        Right v -> return v
-        Left Nothing -> do
-            liftIO $ putStrLn "httpGetResponse: Connection timed out."
-            return ([],[],[],[])
-        Left (Just e) -> do
-            liftIO $ putStr "httpGetResponse: " >> print e
-            return ([],[],[],[])
+    return (body, headers, status)
+  where
+    toString = BU.toString . BL.toStrict
+    mayempty :: Monoid a => Maybe a -> a
+    mayempty = maybe mempty id
+    opts = W.defaults & W.header "User-Agent" .~ [ua]
+    ua = "Mozilla/5.0 (X11; Linux x86_64; rv:10.0) Gecko/20100101 Firefox/10.0"
 
 
 httpGetString :: MonadIO m => String -> m String
-httpGetString url = liftIO $  do
-    (str, _, _, _) <- httpGetResponse url
+httpGetString url = liftIO $ do
+    str <- view _1 <$> httpGetResponse url
     if length str > 10 ^ 6 * 2
         then return ""
         else return str
 
 -- | No redirects or anything, also just the headers.
 httpHead :: MonadIO m => String -> m (Map (CI String) String)
-httpHead url = liftIO $ do
-    e <- E.try $ withManager $ \man -> do
-        initReq <- parseUrl url
-        let req = initReq { requestHeaders = useragent : requestHeaders initReq
-                          , redirectCount = 0
-                          }
-        r <- httpLbs req man
-        let h = responseHeaders r
-        liftIO $ closeManager man
-        return $ M.fromList $ flip map h $ \(k, v) ->
-            (CI.map BU.toString k, BU.toString v)
-    case e of
-        Right a -> return a
-        Left (StatusCodeException _ headers _) ->
-            return $ M.fromList $ flip map headers $ \(k, v) ->
-                (CI.map BU.toString k, BU.toString v)
-        Left _ -> return mempty
-  where
-    useragent = ( "User-Agent"
-                , "Mozilla/5.0 (X11; Linux x86_64; rv:10.0.2) Gecko/20100101 Firefox/10.0.2"
-                )
+httpHead url = M.fromList . view _2 <$> httpGetResponse url
 
 -- | Google translate
 gtranslate :: MonadIO m => String -> String -> String
@@ -564,7 +525,7 @@ toMode t = map modeChar t
 
 -- | Is the MODE +a +o or +q?
 isMod :: [Char] -> Bool
-isMod = any (`elem` "oaq")
+isMod = any (`elem` ['o', 'a', 'q'])
 
 -- | Join several messages with "|" and only until 420 chars.
 pipeJoin :: [Text] -> (Maybe Text, [Text])

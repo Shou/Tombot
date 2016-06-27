@@ -19,6 +19,7 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Error
 import Control.Monad.State
+import Control.Monad.Trans.Either (EitherT(..))
 
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
