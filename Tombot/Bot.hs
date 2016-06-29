@@ -98,9 +98,9 @@ respond line = do
         onPrivmsg irc $ \_ -> do
             adaptPriv irc
             ctcpVersion irc
-            printTell irc
-            void . forkMi $ onMatch irc
-            void . forkMi $ runLang irc
+            printTell putPrivmsg irc
+            void . forkMi $ onMatch putPrivmsg irc
+            void . forkMi $ runLang putPrivmsg irc
             logPriv irc
         onInvite irc $ \_ -> do
             adaptInv irc

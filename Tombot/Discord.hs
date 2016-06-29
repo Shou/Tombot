@@ -1,23 +1,43 @@
 
 {-# LANGUAGE OverloadedStrings, ScopedTypeVariables, DeriveGeneric,
-             TypeOperators, BangPatterns, FlexibleContexts #-}
+             TypeOperators, BangPatterns, FlexibleContexts,
+             EmptyDataDecls, OverloadedLists #-}
 
+-- {{{ Exports
+
+module Tombot.Discord
+    ( runDiscord
+    )
+    where
+
+-- }}}
 
 -- {{{ Imports
 
-import Control.Concurrent (forkIO, threadDelay)
+import qualified Tombot.Hub as Tombot
+import qualified Tombot.IRC as Tombot
+import qualified Tombot.Parser as Tombot
+import qualified Tombot.Types as Tombot
+import qualified Tombot.Utils as Tombot
+
+import Control.Concurrent (forkIO, threadDelay, myThreadId)
+import Control.Concurrent.STM
+import Control.Exception (try, SomeException(..))
 import Control.Lens hiding ((.=), op)
-import Control.Monad (forever, join, unless, void, when)
+import Control.Monad (forever, join, unless, void, when, forM_)
+import Control.Monad.IO.Class
+import Control.Monad.Trans.State
 
 import Data.Aeson
 import Data.Aeson.Types (Options(..))
 import Data.Char (toLower, toUpper)
+import qualified Data.CaseInsensitive as CI
 import Data.IORef
 import Data.List (isPrefixOf)
 import qualified Data.HashMap as HM
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -31,6 +51,7 @@ import Network.WebSockets
 import Network.Wreq hiding (get)
 import Network.Wreq.Types
 
+import System.IO (stdin)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Random (randomRIO)
 
@@ -42,6 +63,7 @@ import Wuss (runSecureClient)
 -- {{{ Data
 
 type f $ a = f a
+
 
 data Identify = Identify { identifyToken :: Text
                          , identifyProperties :: Map Text Text
@@ -230,6 +252,13 @@ props = M.fromList [ ("$os", "linux")
 
 stateSeq = unsafePerformIO $ newIORef 0
 
+stateConfigt = unsafePerformIO $ newEmptyTMVarIO
+
+recvTChan = unsafePerformIO $ newTChanIO
+
+
+trySome :: IO a -> IO $ Either SomeException a
+trySome = try
 
 sendJSON obj conn = do
     let json = encode obj
@@ -264,14 +293,53 @@ onMessage :: Connection -> Dispatch MessageCreate -> IO ()
 onMessage conn dsptch@(Dispatch op d s t) = do
     print dsptch
     atomicWriteIORef stateSeq $ maybe 0 id s
-    when (T.isInfixOf "POO" $ messagecContent d) $ do
-        n <- randomRIO (0, length messages - 1)
-        let msgText = messages !! n
-            msgObj :: Map Text Text
-            msgObj = M.singleton "content" msgText
-            channelId = messagecChannel_id d
-        sendHTTP (messageURL channelId) $ encode msgObj
+    atomically $ writeTChan recvTChan $ messagecContent d
+
+    configt <- atomically $ readTMVar stateConfigt
+    tid <- myThreadId
+    let chan = fromString $ messagecChannel_id d
+        stChan = Tombot.StChannel { Tombot.stChanName = chan
+                                  , Tombot.stChanTopic = ""
+                                  , Tombot.stChanJoin = True
+                                  , Tombot.stChanAutoJoin = True
+                                  , Tombot.stChanMode = ""
+                                  , Tombot.stChanPrefix = ":"
+                                  , Tombot.stChanFuncs = Tombot.Blacklist []
+                                  }
+        chans = [ (chan, stChan) ]
+        nick = maybe "idiot" id . M.lookup "username" $ messagecAuthor d
+        user = Tombot.User (CI.mk nick) "" "" Tombot.Online (M.singleton chan "")
+        server = Tombot.StServer { Tombot.stServHost = "discordapp.com"
+                                 , Tombot.stServPort = 443
+                                 , Tombot.stServChans = chans
+                                 , Tombot.stServBotNicks = ["Tombot"]
+                                 , Tombot.stServBotName = ""
+                                 , Tombot.stServNickServId = Nothing
+                                 , Tombot.stServStat = Tombot.Connected
+                                 , Tombot.stServUsers = []
+                                 , Tombot.stServThreads = []
+                                 }
+        current = Tombot.Current { Tombot.currUser = user
+                                 , Tombot.currMode = ""
+                                 , Tombot.currServ = server
+                                 , Tombot.currDest = Right stChan
+                                 , Tombot.currConfigTMVar = configt
+                                 , Tombot.currHandle = stdin
+                                 , Tombot.currThreadId = tid
+                                 }
+        privmsg = Tombot.Privmsg (CI.mk nick) "" "" chan $ messagecContent d
+
+    s <- newTMVarIO current
+    fmap fst . flip runStateT s $ do
+        Tombot.printTell send privmsg
+        void . Tombot.forkMi $ Tombot.onMatch send privmsg
+        void . Tombot.forkMi $ Tombot.runLang send privmsg
+        Tombot.logPriv privmsg
+
   where
+    send chan msg = when (not $ T.null msg) $ do
+        let msgObj = M.singleton "content" msg :: Map Text Text
+        liftIO $ sendHTTP (messageURL $ T.unpack chan) (encode msgObj)
     messages = [ "HHAHAAH FARTY"
                , "\\*POOPS\\*"
                , "POOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO"
@@ -279,27 +347,31 @@ onMessage conn dsptch@(Dispatch op d s t) = do
                , "HAHAHAHAHAHAHAHAHA"
                , "STINKY!!!!!!!!!!!!!!!"
                , "POO POO POO POO POO POO POO POO"
-               ]
+               ] :: [Text]
 
 websockLoop conn = do
     identify (Identify (fromString botToken) props False 50 [0, 1]) conn
     forever $ do
-        msg <- receiveData conn
-        BL.putStrLn msg
-        let ready = decode msg :: Maybe $ Dispatch Ready
-        let guildCreate = decode msg :: Maybe $ Dispatch GuildCreate
-        let message = decode msg :: Maybe $ Dispatch MessageCreate
-        maybe (return ()) (onMessage conn) message
-        maybe (return ()) (onReady conn) ready
-        maybe (return ()) (onGuildCreate conn) guildCreate
+        emsg <- trySome $ receiveData conn
+
+        flip (either onClose) emsg $ \msg -> do
+            BL.putStrLn msg
+            let ready = decode msg :: Maybe $ Dispatch Ready
+            let guildCreate = decode msg :: Maybe $ Dispatch GuildCreate
+            let message = decode msg :: Maybe $ Dispatch MessageCreate
+            maybe (return ()) (onMessage conn) message
+            maybe (return ()) (onReady conn) ready
+            maybe (return ()) (onGuildCreate conn) guildCreate
+
+onClose e = print e >> websockInit
 
 websockInit = do
     runSecureClient wsURL 443 "/" websockLoop
 
 
-main :: IO ()
-main = do
+runDiscord configt = do
     setLocaleEncoding utf8
+    atomically $ putTMVar stateConfigt configt
     websockInit
 
     --r <- getWith opts gatewayURL

@@ -78,7 +78,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("ra", random, Online)
                 , ("re", remind, Online)
                 , ("kb", kickban, OP)
-                , ("on", respond, OP)
+                , ("on", respond, Online)
                 , ("us", userlist, OP)
                 , ("tr", translate, Online)
                 , ("ops", ops, Online)
@@ -298,8 +298,9 @@ echo = return
 -- | Evaluate KawaiiLang.
 eval :: Func
 eval str = do
-    funcs <- stConfFuncs <$> readConfig
-    botparse funcs str >>= compile funcs
+    -- XXX very spooky??? i.e. does this allfunc magic work?
+    fs <- allfuncs
+    botparse fs str >>= compile fs
 
 -- TODO time argument
 -- | Create an event. Useful with `sleep'.
@@ -573,7 +574,8 @@ help str = do
     dir <- fmap stConfDir readConfig
     mhelps <- readConf $ dir <> "help"
     mfuncs <- readLocalStored "letfuncs"
-    let mboth = liftM2 M.union mhelps mfuncs
+    liftIO $ print mhelps >> print mfuncs
+    let mboth = mhelps <> mfuncs
     let mhelp = join $ M.lookup string <$> mboth
     return $ maybe "" id mhelp
   where
@@ -839,10 +841,13 @@ respond str = do
     flip (maybe $ pure "") m $ \(mat, ins, str') -> do
         let (ns, str'') = fmap T.unpack . bisect (== ' ') $ T.pack str'
             n :: Int
-            (n, string) = maybe (10, str') (,str'') $ readMay (T.unpack ns)
-            f = if null $ dropWhile (== ' ') string
+            (n, string) = maybe (10, str') (,str'') $ readMay $ T.unpack ns
+            f = if null (dropWhile (== ' ') str')
                 then Nothing
                 else Just (ins, n, string)
+
+        liftIO $ print mat >> print ins >> print str'
+
         mvoid . modLocalStored "respond" $ M.alter (const f) mat
 
 responds :: Func

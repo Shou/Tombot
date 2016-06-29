@@ -1,6 +1,6 @@
 
 Name:               Tombot
-Version:            0.2.0
+Version:            0.3.0
 Synopsis:           The Haskell IRC bot that composes functions.
 Author:             Shou
 Maintainer:         x@shou.io
@@ -38,6 +38,7 @@ Executable tombot
         stm,
         text,
         time,
+        transformers,
         utf8-string,
         websockets,
         wreq,

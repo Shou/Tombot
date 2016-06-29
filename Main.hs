@@ -12,6 +12,7 @@ module Main where
 -- {{{ Imports
 import Config
 import Tombot.Bot
+import Tombot.Discord
 import Tombot.IRC
 import Tombot.Types
 import Tombot.Utils
@@ -159,6 +160,7 @@ main :: IO ()
 main = do
     configt <- newTMVarIO $ toStConf config
     forM_ servers $ \server -> forkIO $ initialise configt server
+    forkIO $ runDiscord configt
     userInput configt
 
 -- | Direct input
@@ -178,7 +180,7 @@ userInput ct = loop $ do
         adaptPriv irc
         let user = User "Tombot" "Tombot" "botnet.fbi.gov" Root M.empty
         sets $ \c -> c { currUser = user }
-        runLang irc
+        runLang putPrivmsg irc
   where
     loop :: StateT (Maybe (TMVar Current)) IO () -> IO ()
     loop m = void . flip runStateT Nothing $ forever $ m

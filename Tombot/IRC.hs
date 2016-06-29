@@ -251,19 +251,16 @@ ctcpVersion irc = do
 
 -- TODO lookup user defined functions
 -- |
-runLang :: IRC -> Mind ()
-runLang (Privmsg nick name host d t) = unlessBanned $ do
+runLang :: (Text -> Text -> Mind()) -> IRC -> Mind ()
+runLang send (Privmsg nick name host d t) = unlessBanned $ do
     fs <- allfuncs
     kl <- botparse fs t
     t <- compile fs kl
-    putPrivmsg d t
+    send d t
 
 -- |
-printTell :: IRC -> Mind ()
-printTell (Privmsg nick _ _ dest text) = unlessBanned $ do
-    serv <- sees $ stServHost . currServ
-    tmvar <- sees currConfigTMVar
-    dir <- liftIO . fmap stConfDir . atomically $ readTMVar tmvar
+printTell :: (Text -> Text -> Mind ()) -> IRC -> Mind ()
+printTell send (Privmsg nick _ _ dest text) = unlessBanned $ do
     musers <- readLocalStored "tell"
     let cinick = CI.mk nick
         mtexts = join $ M.lookup cinick <$> musers
@@ -272,13 +269,13 @@ printTell (Privmsg nick _ _ dest text) = unlessBanned $ do
         users = maybe (M.singleton cinick msgs) (M.insert cinick msgs') musers
     when (isJust msg) $ do
         modLocalStored "tell" $ const users
-        putPrivmsg dest $ CI.original nick <> ", " <> fromJust msg
+        send dest $ CI.original nick <> ", " <> fromJust msg
 
 -- FIXME
 -- |
-onMatch :: IRC -> Mind ()
-onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
-    mons <- readLocalStored $ "respond"
+onMatch :: (Text -> Text -> Mind ()) -> IRC -> Mind ()
+onMatch send irc@(Privmsg nick name host dest text) = unlessBanned $ do
+    mons <- readLocalStored "respond"
     let ons :: [(String, (Bool, Int, String))]
         ons = sortBy (comparing $ snd3 . snd) $ maybe mempty M.toList mons
     void . decide $ forM_ ons $ \(match, (ins, n, resp)) -> deci . decide $ do
@@ -294,7 +291,7 @@ onMatch irc@(Privmsg nick name host dest text) = unlessBanned $ do
             indexes = [ '\\' : show x | x <- [0 .. 9]]
             replacer = zipWith replace indexes (T.unpack text : ins)
             resp' = foldr ($) resp replacer
-        lift $ runLang $ irc { privText = T.pack resp' }
+        lift $ runLang send $ irc { privText = T.pack resp' }
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
     deci :: Mind (Either () ()) -> Decide () ()

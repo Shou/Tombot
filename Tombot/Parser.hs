@@ -256,7 +256,7 @@ compile funcs = funky . klToText mempty
                         funkFunc f args
                     put $ StFunk (stFunkRecs fu + 1) (stFunkMax fu)
                     klToText (old <> t) kl
-                else return "pls no recursive functions"
+                else return "pls no recursive"
       where
         kwhen (Oper "<-" _) = True
         kwhen _ = False

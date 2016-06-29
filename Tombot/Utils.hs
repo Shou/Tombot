@@ -44,7 +44,7 @@ import Network.HTTP (urlEncode)
 import Network.HTTP.Types.Status
 import qualified Network.Wreq as W
 
-import System.Directory (copyFile, removeFile)
+import System.Directory (copyFile, removeFile, getTemporaryDirectory)
 import System.IO (hClose, openTempFile, Handle)
 import System.Timeout (timeout)
 
@@ -420,7 +420,7 @@ getAPIKey t = do
 funky :: Funky a -> Mind a
 funky m = do
     s <- get
-    fmap fst . runStateT m $ StFunk 0 39
+    fmap fst . runStateT m $ StFunk 0 1000
 
 allfuncs :: Mind Funcs
 allfuncs = do
@@ -430,7 +430,7 @@ allfuncs = do
     if isJust meval
     then let eval = fromJust meval
              lfuncs = M.mapWithKey (\k v -> Funk k (eval v) Online)
-         in return $ M.union funcs $ maybe mempty lfuncs mlfuncs
+         in return $ funcs <> maybe mempty lfuncs mlfuncs
     else return funcs
 
 -- }}}
@@ -440,15 +440,17 @@ allfuncs = do
 httpGetResponse :: MonadIO m => String
                  -> m (String, [(CI String, String)], String)
 httpGetResponse url = liftIO $ do
-    r <- W.getWith opts url
-    let mbody = fmap toString $ r ^? W.responseBody
-        body = mayempty mbody
-        mstatus = fmap show (r ^? W.responseStatus) <> Just " \x2014 "
-        status = mayempty mstatus
-        bheaders = r ^. W.responseHeaders
-        headers = []
+    er <- try $ W.getWith opts url
 
-    return (body, headers, status)
+    flip (either $ const $ return ("", [], "")) er $ \r -> do
+        let mbody = fmap toString $ r ^? W.responseBody
+            body = mayempty mbody
+            mstatus = fmap show (r ^? W.responseStatus) <> Just " \x2014 "
+            status = mayempty mstatus
+            bheaders = r ^. W.responseHeaders
+            headers = []
+
+        return (body, headers, status)
   where
     toString = BU.toString . BL.toStrict
     mayempty :: Monoid a => Maybe a -> a
@@ -496,7 +498,8 @@ appendFileSafe p t = liftIO $ do
 -- | Write to a temporary file and move it to the intended location.
 writeFileSafe :: MonadIO m => FilePath -> Text -> m ()
 writeFileSafe p t = liftIO $ do
-    (tp, th) <- openTempFile "/tmp" "append"
+    tmpDir <- getTemporaryDirectory
+    (tp, th) <- openTempFile tmpDir "append"
     T.hPutStr th t
     hClose th
     copyFile tp p

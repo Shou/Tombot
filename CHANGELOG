@@ -43,6 +43,11 @@ Later
 - Added new IRC bot functions and operators.
 - Added permission system.
 
+0.3.0
+- Preliminary Discourse support
+- Fixed a bug where let-defined functions were not aware of other let-defined
+  functions
+
 Soon
 - Added runtime module reloading through `hint'.
 
