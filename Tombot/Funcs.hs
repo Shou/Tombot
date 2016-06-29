@@ -18,6 +18,7 @@ import Tombot.Parser
 
 import Control.Applicative
 import Control.Arrow hiding (left, right)
+import Control.BoolLike (Orlike((<|<)))
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Error
@@ -1114,8 +1115,12 @@ voice str = mode $ "+" <> vs <> " " <> T.unwords nicks
 -- | Wikipedia summary fetching.
 wiki :: Func
 wiki str = do
-    let burl = "https://en.wikipedia.org/w/index.php?search="
-        url = T.unpack $ burl <> T.replace "+" "%20" str
+    let (lang', str') = bisect (== ' ') str
+        (lang, str'') = if isLang lang' && not (T.null $ T.strip str')
+                        then (lang', str')
+                        else ("en", str)
+        burl = "https://" <> lang <> ".wikipedia.org/w/index.php?search="
+        url = T.unpack $ burl <> T.replace "+" "%20" str''
     html <- liftIO $ httpGetString url
     let xml = fromMaybeElement $ parseXMLDoc html
         qA = QName "a" Nothing Nothing
@@ -1140,5 +1145,6 @@ wiki str = do
     isMulti t = any (`isSuffixOf` t) [ "may refer to:" :: String
                                      , "can stand for:"
                                      ]
+    isLang x = T.length x <= 3 || x == "simple"
     attr t v = Attr (QName t Nothing Nothing) v
 

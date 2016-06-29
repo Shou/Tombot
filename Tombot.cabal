@@ -16,6 +16,7 @@ Executable tombot
     Build-Depends:
         aeson,
         attoparsec,
+        boolean-like,
         bytestring,
         base,
         case-insensitive,
