@@ -2,7 +2,7 @@ Tombot
 ======
 
 This is the successor to [KawaiiBot-hs](https://github.com/Shou-/KawaiiBot-hs).
-Tombot, a mix of "tomboy" and "bot", is an IRC bot that does useless things,
+Tombot is an IRC bot that does useless things,
 such as grabbing information about anime and manga, having its own small
 composable language and much more.
 
@@ -240,7 +240,7 @@ The opposite of `->`.<br>
 
 * `++`
 Add, it appends the string of the output on the right to the output on the left.<br>
-`.lewd ++ .lewd` - 
+`.ai ++ .an` - 
 
 * `>>`
 Execute the first function, disregard the output and continue.<br>
