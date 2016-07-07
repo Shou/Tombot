@@ -32,13 +32,21 @@ import qualified Data.ByteString.UTF8 as BU
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Char
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.IORef
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+
+import qualified Database.SQLite.Simple as Q
+import qualified Database.SQLite3 as Q ( backupInit
+                                       , backupStep
+                                       , backupRemaining
+                                       , backupFinish
+                                       )
 
 import Network.HTTP (urlEncode)
 import Network.HTTP.Types.Status
@@ -46,6 +54,7 @@ import qualified Network.Wreq as W
 
 import System.Directory (copyFile, removeFile, getTemporaryDirectory)
 import System.IO (hClose, openTempFile, Handle)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Timeout (timeout)
 
 import Text.JSON
@@ -159,6 +168,8 @@ defStServ = StServer { stServHost = mempty
 
 defUser = User { userNick = ""
                , userName = ""
+               , userId = ""
+               , userAvatar = ""
                , userHost = ""
                , userStat = Online
                , userChans = M.empty
@@ -235,9 +246,9 @@ modUser user f = do
 
 -- | From `Channel' to `StChannel'
 toStChan :: Channel -> StChannel
-toStChan (Channel name join ajoin prefix funcs) =
-    let stName = T.pack name
-        stFuncs = map T.pack <$> funcs
+toStChan (Channel name join ajoin _ prefix funcs) =
+    let stName = name
+        stFuncs = funcs
     in StChannel { stChanName = stName
                  , stChanTopic = ""
                  , stChanJoin = join
@@ -261,7 +272,7 @@ toStConf (Config v d lg lp p fs) = StConfig { stConfVerb = v
 -- | From `Server' to `StServer'
 toStServ :: Server -> StServer
 toStServ (Server host port chans nicks name nsid) =
-    let stChans = map (\c -> (T.pack $ chanName c, toStChan c)) chans
+    let stChans = map (\c -> (chanName c, toStChan c)) chans
         stNSId = if null nsid then Nothing else Just (T.pack nsid)
     in StServer { stServHost = host
                 , stServPort = fromIntegral port
@@ -301,7 +312,7 @@ mwhenStat p m = do
         | otherwise -> return mempty
 
 mwhenPrivileged :: Monoid a => Mind a -> Mind a
-mwhenPrivileged = mwhenStat (either isMod (>= OP))
+mwhenPrivileged = mwhenStat (either isMod (>= Mod))
 
 mwhenUserStat :: Monoid a => (UserStatus -> Bool) -> Mind a -> Mind a
 mwhenUserStat p = mwhenStat (either (const False) p)
@@ -309,7 +320,7 @@ mwhenUserStat p = mwhenStat (either (const False) p)
 mwhenPrivTrans :: Monoid a => UserStatus -> Mind a -> Mind a
 mwhenPrivTrans u = mwhenStat (either isPriv (>= u))
   where
-    isPriv = if u >= OP then isMod else const False
+    isPriv = if u >= Mod then isMod else const False
 
 unlessBanned :: Mind () -> Mind ()
 unlessBanned m = whenStat (either (const False) (/= Banned)) m
@@ -359,14 +370,19 @@ readConf path = liftIO $ do
 --   bot's path.
 readLocalStored :: (Read a) => FilePath -> Mind (Maybe a)
 readLocalStored path = do
-    serv <- sees $ stServHost . currServ
+    mchans <- readServerStored path
     edest <- sees currDest
+    let dest = either userName stChanName edest
+        mstoreds = join $ M.lookup dest <$> mchans
+    return mstoreds
+
+readServerStored :: (Read a) => FilePath -> Mind (Maybe a)
+readServerStored path = do
+    serv <- sees $ stServHost . currServ
     dir <- stConfDir <$> readConfig
     mservers <- readConf $ dir <> path
-    let dest = either userName stChanName edest
-        mchans = join $ M.lookup serv <$> mservers
-        mstoreds = join $ M.lookup dest <$> mchans
-    return $ mstoreds
+    let mchans = join $ M.lookup serv <$> mservers
+    return mchans
 
 -- | Modify a local (to the server and channel) value stored in a file in the
 --   bot's path.
@@ -422,20 +438,31 @@ funky m = do
     s <- get
     fmap fst . runStateT m $ StFunk 0 1000
 
-allfuncs :: Mind Funcs
-allfuncs = do
+serverfuncs :: Mind Funcs
+serverfuncs = do
     funcs <- stConfFuncs <$> readConfig
-    mlfuncs <- readLocalStored "letfuncs"
+    mschans <- readServerStored "letfuncs"
+    edest <- sees currDest
+    let msfuncs = M.unions . M.elems <$> mschans
+        dest = either userName stChanName edest
+        mlfuncs = join $ M.lookup dest <$> mschans
+        lsfuncs = maybe mempty id $ M.union <$> mlfuncs <*> msfuncs
     let meval = (\f -> \g -> f . (g <>)) . funkFunc <$> M.lookup "eval" funcs
     if isJust meval
     then let eval = fromJust meval
-             lfuncs = M.mapWithKey (\k v -> Funk k (eval v) Online)
-         in return $ funcs <> maybe mempty lfuncs mlfuncs
+             lsfuncs' = M.mapWithKey (\k v -> Funk k (eval v) Online) lsfuncs
+         in return $ M.union funcs lsfuncs'
     else return funcs
+
+localfuncs :: Mind Funcs
+localfuncs = do
+    return mempty
 
 -- }}}
 
 -- {{{ HTTP utils
+
+mozUserAgent =  "Mozilla/5.0 (X11; Linux x86_64; rv:10.0) Gecko/20100101 Firefox/10.0"
 
 httpGetResponse :: MonadIO m => String
                  -> m (String, [(CI String, String)], String)
@@ -455,8 +482,7 @@ httpGetResponse url = liftIO $ do
     toString = BU.toString . BL.toStrict
     mayempty :: Monoid a => Maybe a -> a
     mayempty = maybe mempty id
-    opts = W.defaults & W.header "User-Agent" .~ [ua]
-    ua = "Mozilla/5.0 (X11; Linux x86_64; rv:10.0) Gecko/20100101 Firefox/10.0"
+    opts = W.defaults & W.header "User-Agent" .~ [mozUserAgent]
 
 
 httpGetString :: MonadIO m => String -> m String
@@ -507,6 +533,53 @@ writeFileSafe p t = liftIO $ do
 
 -- }}}
 
+-- {{{ Database utils
+
+memoryDBRef = unsafePerformIO $ Q.open ":memory:" >>= newTMVarIO
+memoryDB :: MonadIO m => m Q.Connection
+memoryDB = liftIO $ atomically $ readTMVar memoryDBRef
+
+fileDBRef = unsafePerformIO $ Q.open "db" >>= newTMVarIO
+fileDB :: MonadIO m => m Q.Connection
+fileDB = liftIO $ atomically $ readTMVar fileDBRef
+
+-- TODO per-channel logs
+initDB :: MonadIO m => m ()
+initDB = liftIO $ do
+    mdb <- memoryDB
+    fdb <- fileDB
+    let q = "CREATE TABLE IF NOT EXISTS logs("
+         <> "date TEXT NOT NULL,"
+         <> "mesg TEXT NOT NULL,"
+         <> "nick TEXT NOT NULL,"
+         <> "chnl TEXT NOT NULL,"
+         <> "iden TEXT);"
+    forM_ [mdb, fdb] $ \db -> Q.execute_ db q
+
+insertLog date mesg nick chnl iden = liftIO $ do
+    mdb <- memoryDB
+    fdb <- fileDB
+    forM_ [mdb, fdb] $ \db -> do
+        let query = "INSERT INTO logs (date, mesg, nick, chnl, iden) VALUES (?,?,?,?,?)"
+        Q.execute db query (date, mesg, nick, chnl, iden)
+
+queryLogs :: (MonadIO m, Q.FromRow a) => m [a]
+queryLogs = liftIO $ do
+    db <- memoryDB
+    Q.query_ db "SELECT * FROM logs;"
+
+loadDB :: MonadIO m => m ()
+loadDB = liftIO $ do
+    mdb <- Q.connectionHandle <$> memoryDB
+    fdb <- Q.connectionHandle <$> fileDB
+    bu <- Q.backupInit mdb "main" fdb "main"
+    r <- Q.backupStep bu (-1)
+    step <- Q.backupRemaining bu
+    print r >> print step
+    Q.backupFinish bu
+
+-- }}}
+
 -- {{{ IRC Text utils
 
 ctcp :: Text -> Text
@@ -551,7 +624,7 @@ adaptWith chan nick name host f = do
     mchan <- sees $ M.lookup chan . stServChans . currServ
     users <- sees $ stServUsers . currServ
     let muser = M.lookup nick users
-        puser = fromJust $ muser <|> Just (User nick name host Online mempty)
+        puser = fromJust $ muser <|> Just (User nick name "" "" host Online mempty)
         chans = if isChan chan
                 then M.alter (maybe (Just "") Just) chan $ userChans puser
                 else userChans puser

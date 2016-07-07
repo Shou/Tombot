@@ -159,6 +159,7 @@ import System.IO
 main :: IO ()
 main = do
     configt <- newTMVarIO $ toStConf config
+    initDB >> loadDB
     forM_ servers $ \server -> forkIO $ initialise configt server
     forkIO $ runDiscord configt
     userInput configt
@@ -178,7 +179,7 @@ userInput ct = loop $ do
     flip (maybe $ return ()) ms $ \st -> void . liftIO . flip runStateT st $ do
         let irc = Privmsg "Tombot" "" "" channel message
         adaptPriv irc
-        let user = User "Tombot" "Tombot" "botnet.fbi.gov" Root M.empty
+        let user = User "Tombot" "Tombot" "" "" "botnet.fbi.gov" BotOwner M.empty
         sets $ \c -> c { currUser = user }
         runLang putPrivmsg irc
   where

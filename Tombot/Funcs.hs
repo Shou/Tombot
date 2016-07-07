@@ -3,10 +3,9 @@
 -- See the file "LICENSE" for more information.
 -- Copyright Shou, 2013
 
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DoAndIfThenElse #-}
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings, DoAndIfThenElse, BangPatterns,
+             TupleSections, ScopedTypeVariables, DeriveGeneric,
+             PartialTypeSignatures #-}
 
 module Tombot.Funcs (funcs) where
 
@@ -18,41 +17,61 @@ import Tombot.Parser
 
 import Control.Applicative
 import Control.Arrow hiding (left, right)
-import Control.BoolLike (Orlike((<|<)))
+import Control.BoolLike
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Error
 import Control.Exception (SomeException)
 import qualified Control.Exception as E
+import Control.Lens as L hiding (sets)
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Trans.Either (left, right)
 
+import Data.Aeson
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString as B
+import qualified Data.ByteString.UTF8 as BU
 import qualified Data.CaseInsensitive as CI
 import Data.Char
+import Data.Coerce
+import Data.IORef
 import Data.List
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
+import Data.Time (utcToLocalTime, formatTime, defaultTimeLocale
+                 , TimeZone(..)
+                 )
+import Data.Time.Clock.POSIX
+
 import Debug.Trace
 
 import qualified Language.Haskell.Interpreter as H
 
+import GHC.Generics
+
 import Network.HTTP (urlDecode, urlEncode)
+import Network.Wreq ( getWith, post, postWith, headWith, responseBody
+                    , defaults, param, header, FormParam(..)
+                    , checkStatus
+                    )
 
 import System.Exit (ExitCode(ExitSuccess))
 import System.IO (hClose)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Random (randomRIO)
 import System.Process (readProcessWithExitCode, spawnCommand)
 
-import Text.JSON
+import qualified Text.JSON as J
 import Text.Regex
 import Text.XML.Light
 
@@ -61,31 +80,31 @@ import Text.XML.Light
 
 funcs :: Map Text Funk
 funcs = toFunks [ ("!", ddg, Online)
-                , ("b", ban, OP)
+                , ("b", ban, Mod)
                 , (">", echo, Online)
                 , ("<", priv, Online)
-                , ("k", kick, OP)
-                , ("m", mode, OP)
-                , ("v", voice, OP)
+                , ("k", kick, Mod)
+                , ("m", mode, Mod)
+                , ("v", voice, Mod)
                 , ("x", exchange, Online)
                 , ("^", findMsg, Online)
                 , ("me", me, Online)
                 , ("np", lastfm, Online)
-                , ("an", anime, Online)
                 , ("in", match, Online)
                 , ("ma", manga, Online)
                 , ("ai", airing, Online)
-                , ("hs", mueval, Online)
+                , ("an", anime, Online)
                 , ("ra", random, Online)
                 , ("re", remind, Online)
-                , ("kb", kickban, OP)
+                , ("kb", kickban, Mod)
                 , ("on", respond, Online)
-                , ("us", userlist, OP)
+                , ("us", userlist, Mod)
                 , ("tr", translate, Online)
                 , ("ops", ops, Online)
                 , ("onf", frespond, Online)
+                , ("onp", prespond, Online)
                 , ("ons", responds, Online)
-                , ("raw", raw, Root)
+                , ("raw", raw, BotOwner)
                 , ("sed", sed, Online)
                 , ("len", count, Online)
                 , ("let", store, Online)
@@ -97,8 +116,9 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("host", host, Online)
                 , ("http", http, Online)
                 , ("isup", isup, Online)
-                , ("kill", kill, Admin)
+                , ("kill", kill, Online)
                 , ("name", name, Online)
+                , ("nyaa", nyaa, Online)
                 , ("nick", nick, Online)
                 , ("quit", quit, Admin)
                 , ("stat", stat, Online)
@@ -106,11 +126,11 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("wiki", wiki, Online)
                 , ("show", reveal, Online)
                 , ("join", chanjoin, Online)
-                , ("part", partchan, OP)
+                , ("part", partchan, Mod)
                 , ("verb", verbosity, Admin)
                 , ("cjoin", cjoin, Online)
-                , ("event", event, Admin)
-                , ("fstat", fstat, OP)
+                , ("event", event, Online)
+                , ("fstat", fstat, Mod)
                 , ("funcs", list, Online)
                 , ("kanji", kanji, Online)
                 , ("nicks", nicks, Admin)
@@ -118,11 +138,16 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("title", title, Online)
                 , ("topic", topic, Online)
                 , ("cajoin", cajoin, Online)
+                , ("markov", markov, Online)
                 , ("prefix", prefix, Online)
                 , ("romaji", romaji, Online)
-                , ("reverse", rwords, Online)
-                , ("restart", restart, Root)
                 , ("connect", connectIRC, Admin)
+                , ("reverse", rwords, Online)
+                , ("restart", restart, BotOwner)
+                , ("shadify", shadify, Online)
+                , ("version", \_ -> return version, Online)
+                , ("unixtime", unixtime, Online)
+                , ("formattime", formattime, Online)
                 ]
 
 
@@ -156,65 +181,217 @@ anime' str = do
     className = Attr (QName "class" Nothing Nothing)
 
 -- | Anime releases function.
-anime :: Text -> Mind Text
-anime str = do
+nyaa :: Func
+nyaa str = do
     animes <- anime' str
-    let animes' = map (colourise . T.pack) animes
+    let animes' = map T.pack animes
     return $ T.intercalate ", " animes'
 
--- TODO filter
+
+newtype AniToken = AniToken (Int, Text) deriving (Show)
+
+instance FromJSON AniToken where
+    parseJSON (Object v) = fmap AniToken $ (,) <$> v .: "expires"
+                                               <*> v .: "access_token"
+    parseJSON _ = pure $ AniToken (0, "")
+
+data AniAiring =
+    AniAiring { airCountdown :: Int
+              , airNext_episode :: Int
+              , airTime :: Text
+              }
+              deriving (Show, Generic)
+instance FromJSON AniAiring where
+    parseJSON = lowerFromJSON 3
+
+data SmallAniModel =
+    SmallAniModel { sanAdult :: Bool
+                  , sanAiring :: Maybe AniAiring
+                  , sanAiring_status :: Text
+                  , sanAverage_score :: Text
+                  , sanId :: Int
+                  , sanImage_url_lge :: Text
+                  , sanImage_url_med :: Text
+                  , sanImage_url_sml :: Text
+                  , sanPopularity :: Int
+                  -- XXX bad ani documentation doesn't specify data type
+                  , sanRelation_type :: Value
+                  , sanRole :: Value
+                  , sanSynonyms :: [Text]
+                  , sanTitle_english :: Text
+                  , sanTitle_japanese :: Text
+                  , sanTitle_romaji :: Text
+                  , sanTotal_episodes :: Maybe Int
+                  , sanType :: Text
+                  }
+                  deriving (Show, Generic)
+instance FromJSON SmallAniModel where
+    parseJSON = lowerFromJSON 3
+
+data AniModel =
+    AniModel { anAdult :: Bool
+             , anAiring :: Maybe AniAiring
+             , anAiring_status :: Text
+             , anAverage_score :: Text
+             , anClassification :: Maybe Text
+             , anDescription :: Text
+             , anDuration :: Maybe Int
+             , anEnd_date :: Maybe Text
+             , anGenres :: [Text]
+             , anHashtag :: Maybe Text
+             , anId :: Int
+             , anImage_url_banner :: Maybe Text
+             , anImage_url_lge :: Text
+             , anImage_url_med :: Text
+             , anImage_url_sml :: Text
+             , anList_stats :: Value
+             , anPopularity :: Int
+             , anRelation_type :: Value
+             , anRole :: Value
+             , anSource :: Maybe Text
+             , anStart_date :: Maybe Text
+             , anSynonyms :: [Text]
+             , anTitle_english :: Text
+             , anTitle_japanese :: Text
+             , anTitle_romaji :: Text
+             , anTotal_episodes :: Maybe Int
+             , anType :: Text
+             , anYoutube_id :: Maybe Text
+             }
+             deriving (Show, Generic)
+instance FromJSON AniModel where
+    parseJSON = lowerFromJSON 2
+
+anilistToken :: TMVar (Maybe (Int, Text))
+anilistToken = unsafePerformIO $ newTMVarIO Nothing
+
+aniAuthToken :: Mind (Maybe Text)
+aniAuthToken = do
+    cid <- maybe mempty id <$> getAPIKey "ani-id"
+    cse <- maybe mempty id <$> getAPIKey "ani-secret"
+    let args :: [(B.ByteString, B.ByteString)]
+        args = [ ("grant_type", "client_credentials")
+               , ("client_id", T.encodeUtf8 cid)
+               , ("client_secret", T.encodeUtf8 cse)
+               ]
+        url = "https://anilist.co/api/auth/access_token"
+    er <- try $ post url args
+    let mobj :: Maybe AniToken
+        mobj = join $ decode . (^. responseBody) <$> hush er
+        mtok :: Maybe (Int, Text)
+        mtok = coerce <$> mobj
+    liftIO $ putStr "Token received? " >> print mtok
+    liftIO $ atomically $ swapTMVar anilistToken mtok
+    return $ snd <$> mtok
+
+getToken :: Mind (Maybe Text)
+getToken = do
+    mtokpair <- liftIO $ atomically $ readTMVar anilistToken
+    timenow <- liftIO $ floor <$> getPOSIXTime
+
+    let mstored = join . flip fmap mtokpair $ \(expires, token) ->
+            if timenow < expires then Just token else Nothing
+    mtok <- maybe aniAuthToken (return . Just) mstored
+    liftIO $ putStr "Token exists? " >> print mstored >> print mtok
+    return mtok
+
+anime :: Func
+anime str = do
+    mtok <- getToken
+
+    let mstr = fmap T.singleton
+             . listToMaybe
+             . T.unpack
+             $ T.dropWhile (== ' ') str
+
+    flip (maybe $ return "") (mstr >&> mtok) $ \token -> do
+        let opts = defaults
+                 & header "User-Agent" .~ [T.encodeUtf8 version]
+                 & header "Authorization" .~ [T.encodeUtf8 token]
+            encodedStr = urlEncode $ T.unpack str
+            surl = "https://anilist.co/api/anime/search/" <> encodedStr
+
+        liftIO $ print surl
+
+        esr <- try $ getWith opts surl
+        let manimeId = join $ do
+                -- obj :: Maybe [SmallAniModel]
+                obj <- join $ decode . (^. responseBody) <$> hush esr
+                return $ show . sanId <$> headMay obj
+            maurl = ("https://anilist.co/api/anime/" <>) <$> manimeId
+
+        liftIO $ print maurl
+
+        mear <- maybe (pure Nothing) (fmap Just . try . getWith opts) maurl
+
+        liftIO $ maybe (return ())
+                       (BL.writeFile "anijson" . (^. responseBody))
+                       (join $ hush <$> mear)
+
+        let result = maybe "" id $ do
+                -- obj :: Maybe AniModel
+                obj <- join $ decode . (^. responseBody) <$> join (fmap hush mear)
+                return $ T.concat [ anTitle_romaji obj
+                                  , " (" <> anTitle_japanese obj <> ")"
+                                  , ": " <> anDescription obj
+                                  , "\n" <> anImage_url_med obj
+                                  ]
+
+        case esr of
+            Right _ -> return result
+            Left _ -> do
+                liftIO $ atomically $ swapTMVar anilistToken Nothing
+                return ""
+
+-- TODO complete filter, negative searches
 airing :: Func
 airing str = do
-    let (tn', str') = bisect (== ' ') str
-        mn = readMay $ T.unpack tn' :: Maybe Int
-        n = maybe 10 id mn
-        (o, s) = if tn' `elem` ["se", "SE", "st", "ST", "ai", "AI", "et", "ET"]
-            then (tn', str')
-            else ("ET", str)
-        url = "http://www.mahou.org/Showtime/?o=" <> T.unpack o
-        isSearch = not $ T.null s
-        (matches, filters) = wordbreaks ((== '-') . T.head) s
-        search = T.unpack $ T.unwords matches
-        filters' = map (tailSafe . T.unpack) filters
-    content <- httpGetString url
-    let elem = fromMaybeElement $ parseXMLDoc content
-        current = getAnimes elem "Currently Airing"
-        soon = getAnimes elem "Starting Soon"
-        tds :: [[String]]
-        tds = current ++ soon
-        f (_ : series : season : station : company : time : eta : xs) acc =
-            let seri = "\ETX10" ++ series ++ "\ETX"
-                tim' = "\ETX06" ++ time ++ "\ETX"
-                eta' = "(" ++ istrip eta ++ ")"
-                nonSearch = unwords [seri, tim', eta']
-                proSearch = unwords [ "\ETX10Series\ETX:", series
-                                    , "\ETX10Season\ETX:", season
-                                    , "\ETX10Time\ETX:", time
-                                    , "\ETX10ETA\ETX:", istrip eta
-                                    , "\ETX10Station\ETX:", station
-                                    , "\ETX10Company\ETX:", company
-                                    ]
-            in if isSearch then
-                let searcher = map (`isInfixOf` map toLower series)
-                in if or $ searcher filters' then acc
-                   else if and . searcher . words $ map toLower search
-                        then proSearch : acc
-                        else acc
-               else nonSearch : acc
-        f _ acc = acc
-        mangas = take n $ foldr f [] tds
-    return . T.pack $ joinUntil ((>= 400) . length) ", " mangas
-  where
-    istrip = unwords . words
-    getAnimes :: Element -> String -> [[String]]
-    getAnimes html tname =
-        let qTable = QName "table" Nothing Nothing
-            aSummary = [Attr (QName "summary" Nothing Nothing) tname]
-            table = findElementsAttrs qTable aSummary html
-            table2 = join $ fmap (findElementsIn qTable) table
-            qTr = QName "tr" Nothing Nothing
-            trs = drop 1 . join $ fmap (findElements qTr) table2
-        in fmap (fmap elemsText . contentsToEls . elContent) trs
+    mtok <- getToken
+
+    flip (maybe $ return "") mtok $ \token -> do
+        let opts = defaults
+                 & header "User-Agent" .~ [T.encodeUtf8 version]
+                 & header "Authorization" .~ [T.encodeUtf8 token]
+                 & param "full_page" .~ ["true"]
+                 & param "airing_data" .~ ["true"]
+                 & param "status" .~ ["Currently Airing"]
+            url = "https://anilist.co/api/browse/anime"
+
+        er <- try $ getWith opts url
+        tstamp <- liftIO $ getPOSIXTime
+
+        let mpairs = do
+                -- obj :: [SmallAniModel]
+                obj <- join $ decode . (^. responseBody) <$> hush er
+                -- not actually a pair lol
+                return $ zipWith3 (,,)
+                    (map sanTitle_english obj)
+                    (map (fmap airCountdown . sanAiring) obj)
+                    (map (fmap airNext_episode . sanAiring) obj)
+            pairs = join $ maybeToList mpairs
+            justAiring = map (over _3 fromJust)
+                       $ map (over _2 $ maybe 0 id)
+                       $ filter (isJust . view _3) pairs
+            sortedPairs = sortBy (comparing $ view _2) justAiring
+            searchTitles = filter (T.isInfixOf (T.toLower str) . T.toLower . view _1) sortedPairs
+            airs = flip map searchTitles $ \(title, time, episode) ->
+                let stime = fromIntegral time + tstamp
+                    ((days, hours), mins) = over _1 (`divMod` 24)
+                                          $ div time 60 `divMod` 60
+                    ldays = bool "" (show days <> "d") $ days > 0
+                    lhours = bool "" (show hours <> "h") $ hours > 0
+                    lmins = bool "" (show mins <> "m") $ mins > 0
+                    ldate = T.pack . unwords $ filter (/= "") [ldays, lhours, lmins]
+                in T.concat [ title, " (ep. ", T.pack $ show episode
+                            , ")", andmconcat [" in ", ldate]
+                            ]
+            airingText = T.intercalate ", " $ take 15 airs
+
+        case er of
+            Right _ -> return airingText
+            Left _ -> do
+                liftIO $ atomically $ swapTMVar anilistToken Nothing
+                return ""
 
 -- TODO multiple users
 --      ban by hostname
@@ -270,15 +447,28 @@ cjoin str = do
 ddg :: Func
 ddg str = do
     let burl = ("https://api.duckduckgo.com/?format=json&q=!" <>)
-    headers <- httpHead $ burl $ urlEncode $ T.unpack str
-    let json = maybe "" id $ M.lookup "X-Response-Body-Start" headers
-        mres :: Maybe (JSObject JSValue)
-        mres = resultMay $ decode json
-        mx = do
-            o <- mres
-            s <- lookup "Redirect" $ fromJSObject o
-            fromJSString <$> stringMay s
-    return $ maybe "" T.pack mx
+        opts = L.set checkStatus (Just $ \_ _ _ -> Nothing) defaults
+
+    er <- try $ headWith opts $ burl $ urlEncode $ T.unpack str
+
+    case er of
+        Right r -> liftIO $ print r >> return ""
+        Left e -> liftIO $ print e >> return ""
+
+-- | Shadify an URL
+shadify :: Func
+shadify str = do
+    let form :: [(B.ByteString, B.ByteString)]
+        form = [ ("oourl", T.encodeUtf8 str)
+               , ("category", "shadify")
+               ]
+    er <- try $ post "http://urlify.io/murl.php" form
+    flip (either $ \l -> liftIO (print l) >> pure "") er $ \r -> do
+        let parser = A.string "<a href='" >> A.takeWhile1 (/= '\'')
+            responseText = T.decodeUtf8 . BL.toStrict $ r ^. responseBody
+            murl = A.parseOnly parser responseText
+
+        either (\_ -> return "") return murl
 
 -- XXX What purpose does this serve now?
 --      - Perhaps we can use it for the planned `load' function.
@@ -300,41 +490,43 @@ echo = return
 eval :: Func
 eval str = do
     -- XXX very spooky??? i.e. does this allfunc magic work?
-    fs <- allfuncs
+    fs <- serverfuncs
     botparse fs str >>= compile fs
 
+-- XXX use mWhenUserStat (>= Admin) when event time argument < 1000
 -- TODO time argument
 -- | Create an event. Useful with `sleep'.
 event :: Func
 event str = do
     d <- either origNick stChanName . currDest <$> see
     kill name
-    tid <- forkMi $ whileAlive $ do
-        funcs <- stConfFuncs <$> readConfig
-        kl <- botparse funcs kl
-        when (kl == mempty) $ void $ kill name
-        t <- compile funcs kl
-        putPrivmsg d t
-    sets $ \c ->
-        c { currServ =
-            (currServ c) { stServThreads =
-                let tds = stServThreads $ currServ c
-                in M.insert name tid tds
-                         }
-          }
-    return ""
+    (if time < 1000 then mwhenUserStat (>= Admin) else id) $ do
+        tid <- forkMi $ whileAlive $ do
+            liftIO $ threadDelay $ fromEnum $ 10^6*time
+            t <- eval skl
+            -- TODO FIXME send
+            --putPrivmsg d t
+            liftIO $ print t
+        sets $ \c ->
+            c { currServ =
+                (currServ c) { stServThreads =
+                    let tds = stServThreads $ currServ c
+                    in M.insert name tid tds }}
+        return $ "Made event: " <> name
   where
     (name, str') = bisect (== ' ') str
-    (tim, kl) = bisect (== ' ') str'
-    time = readDef 300 (T.unpack tim) :: Int
+    (tim, skl) = bisect (== ' ') str'
+    time = readDef 1000 (T.unpack tim) :: Int
     whileAlive m = do
         evs <- sees $ stServThreads . currServ
         if M.member name evs
-        then m >> whileAlive m
-        else do
-            let evs' = M.delete name evs
-            sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
+            then m >> whileAlive m
+            else void $ kill name
 
+exchangeRateCache = unsafePerformIO $ newEmptyTMVarIO
+
+-- FIXME doesn't work
+-- XXX use http://fixer.io/
 -- | Currency exchange function.
 exchange :: Func
 exchange str = do
@@ -342,12 +534,12 @@ exchange str = do
               , "&to=" <> T.unpack b
               ]
     jsonStr <- httpGetString $ concat url
-    let mres :: Maybe (JSObject JSValue)
-        mres = resultMay $ decode jsonStr
+    let mres :: Maybe (J.JSObject J.JSValue)
+        mres = resultMay $ J.decode jsonStr
         mdubz :: Maybe Float
         mdubz = do
             o <- mres
-            join . fmap floatMay . lookup "rate" $ fromJSObject o
+            join . fmap floatMay . lookup "rate" $ J.fromJSObject o
     return $ maybe "" (T.pack . show . (x *)) mdubz
   where
     (x, str') = first (read . T.unpack) $ bisect (== ' ') str
@@ -414,14 +606,14 @@ kickban str = do
 
 -- | Kill an event
 kill :: Func
-kill str = mwhenPrivileged $ do
+kill str = do
     evs <- sees $ stServThreads . currServ
     let mev = M.lookup str evs
     flip (maybe $ return "") mev $ \ev -> do
         liftIO $ killThread ev
         let evs' = M.delete str evs
         sets $ \c -> c { currServ = (currServ c) { stServThreads = evs' } }
-        return $ "Killed event `" <> str <> "'"
+        return $ "Killed event: " <> str
 
 -- TODO
 -- | Connect to an IRC server.
@@ -467,45 +659,45 @@ lastfm str = do
               , "&limit=1&extended=1&format=json"
               ]
     jsonStr <- httpGetString $ concat url
-    let mres :: Maybe (JSObject JSValue)
-        mres = resultMay $ decode jsonStr
+    let mres :: Maybe (J.JSObject J.JSValue)
+        mres = resultMay $ J.decode jsonStr
         -- TODO split this up, if Nothing on any it returns Nothing
         morcs = do
             o <- mres
-            jorcs <- lookup "recenttracks" $ fromJSObject o
-            fromJSObject <$> objectMay jorcs
+            jorcs <- lookup "recenttracks" $ J.fromJSObject o
+            J.fromJSObject <$> objectMay jorcs
         user = do
             orcs <- morcs
             jours <- lookup "@attr" orcs
-            ours <- fromJSObject <$> objectMay jours
+            ours <- J.fromJSObject <$> objectMay jours
             jsuser <- lookup "user" ours
-            fromJSString <$> stringMay jsuser
+            J.fromJSString <$> stringMay jsuser
         mtr = do
             orcs <- morcs
             trs <- join . fmap arrayMay $ lookup "track" orcs
-            fmap fromJSObject . join . fmap objectMay $ trs `atMay` 0
+            fmap J.fromJSObject . join . fmap objectMay $ trs `atMay` 0
         bnp = maybe False id $ do
             tr <- mtr
             jars <- lookup "@attr" tr
-            ars <- fromJSObject <$> objectMay jars
+            ars <- J.fromJSObject <$> objectMay jars
             sb <- join . fmap stringMay $ lookup "nowplaying" ars
-            return $ fromJSString sb == "true"
+            return $ J.fromJSString sb == "true"
         np = if bnp then " ▸" else ""
         artist = maybe "" id $ do
             tr <- mtr
             jart <- lookup "artist" tr
-            art <- fromJSObject <$> objectMay jart
+            art <- J.fromJSObject <$> objectMay jart
             jartist <- lookup "name" art
-            fromJSString <$> stringMay jartist
+            J.fromJSString <$> stringMay jartist
         blove = maybe False id $ do
             tr <- mtr
             jlove <- lookup "loved" tr
-            (== "1") . fromJSString <$> stringMay jlove
+            (== "1") . J.fromJSString <$> stringMay jlove
         love = if blove then "\ETX13♥\ETX" else "\ETX10♫\ETX"
         title = maybe "" id $ do
             tr <- mtr
             jtitle <- lookup "name" tr
-            fromJSString <$> stringMay jtitle
+            J.fromJSString <$> stringMay jtitle
 
     verb mtr
     verb blove
@@ -574,9 +766,14 @@ help :: Func
 help str = do
     dir <- fmap stConfDir readConfig
     mhelps <- readConf $ dir <> "help"
-    mfuncs <- readLocalStored "letfuncs"
-    liftIO $ print mhelps >> print mfuncs
-    let mboth = mhelps <> mfuncs
+    mschans <- readServerStored "letfuncs"
+    edest <- sees currDest
+    let msfuncs = M.unions . M.elems <$> mschans
+        dest = either userName stChanName edest
+        mlfuncs = join $ M.lookup dest <$> mschans
+        mlsfuncs = M.union <$> mlfuncs <*> msfuncs
+    liftIO $ print mhelps >> print mlsfuncs
+    let mboth = mhelps <> mlsfuncs
     let mhelp = join $ M.lookup string <$> mboth
     return $ maybe "" id mhelp
   where
@@ -584,6 +781,8 @@ help str = do
              then "help"
              else T.strip $ T.toLower str
 
+-- TODO FIXME per-chanel logs
+-- XXX we may be able to use SQL queries to search???
 -- | Search the bot's logs and return a matching message if any.
 history :: Func
 history str = do
@@ -593,21 +792,54 @@ history str = do
         string = maybe str (const str') mn
         (matches, filters) = wordbreaks ((== '-') . T.head) string
         filters' = map (T.pack . tailSafe . T.unpack) filters
-    host <- stServHost <$> sees currServ
     edest <- sees currDest
-    path <- fmap stConfLogPath readConfig
-    let dest = T.unpack $ either origNick stChanName edest
-        path' = path <> host <> " " <> dest
-    ts <- reverse . T.lines <$> liftIO (T.readFile path')
-    let ts' = do
-            t <- ts
+    let dest = either origNick stChanName edest
+    (rts :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
+    let ts = do
+            (date, mesg, nick, chnl, miden) <- rts
+            let t = date <> "\t" <> "\t" <> mesg
             guard $ if null matches then True
                     else all (`T.isInfixOf` t) matches
             guard $ if null filters' then True
                     else not $ any (`T.isInfixOf` t) filters'
+            guard $ dest == chnl
             return t
-        mt = ts' `atMay` n
+        mt = ts `atMay` n
     return $ maybe "" id mt
+
+-- TODO strip non-letters
+-- TODO remove a whole line (not chain) on match from that
+-- XXX search str in rls, up to strength defined in "s"
+markov :: Func
+markov str = do
+    let args = take 1 $ T.words str
+    (rls :: [(Text, Text, Text)]) <- queryLogs
+    let mesgs = map (view _3) rls
+        f :: Text -> [[Text]]
+        f t = map (take (s*2)) . takeWhile ((>=(s*2)) . length) $ scanl (\b _ -> drop 1 b) (T.words t) [0 ..]
+        chains :: [[Text]]
+        chains = join $ map f mesgs
+        fchains = filter (T.isInfixOf str . T.unwords) chains
+    n <- liftIO $ randomRIO (0, length fchains - 1)
+    rlen <- liftIO $ randomRIO (5, 20)
+    let mchain = fchains `atMay` n
+    generated <- T.unwords . join <$> maybe (pure []) (chainer rlen chains) mchain
+    return generated
+  where
+    s = 3 -- XXX markov chain strength
+    matcher :: [Text] -> [[Text]] -> [[Text]]
+    matcher c cs = do
+        cm <- cs
+        guard $ not (null c || null cm)
+        guard $ map CI.mk (drop s c) == map CI.mk (take s cm)
+        return cm
+    chainer :: Int -> [[Text]] -> [Text] -> Mind [[Text]]
+    chainer 0 cs c = pure [c]
+    chainer n cs c = do
+        let mcs = matcher c cs
+        n <- liftIO $ randomRIO (0, length mcs - 1)
+        let mc = mcs `atMay` n
+        maybe (pure [c]) (\jc -> (take s c :) <$> chainer (n-1) cs jc) mc
 
 -- | The current user's hostname
 host :: Func
@@ -634,7 +866,12 @@ isup str = do
 --     >, [attr="value"], :nth-child, .class, #id, etc, except adjusted for JSON
 -- TODO
 json :: Func
-json str = return ""
+json str = do
+    let mobj = decode (BL.fromStrict $ T.encodeUtf8 json) :: Maybe Value
+        v = undefined
+    return ""
+  where
+    (ssel, json) = bisect (== ' ') str
 
 -- TODO filter
 -- | Recent manga releases.
@@ -730,7 +967,7 @@ nicks str = if T.null $ T.strip str
 
 -- | List the bot's available operators.
 ops :: Func
-ops _ = return "++ -> <- <> >< >> +>"
+ops _ = return "++ -> <- <> >< >> +> == /= => />"
 
 -- | Part from a channel.
 partchan :: Func
@@ -851,37 +1088,53 @@ respond str = do
 
         mvoid . modLocalStored "respond" $ M.alter (const f) mat
 
+-- FIXME prioritize locals
 responds :: Func
-responds  str = do
-    mons <- readLocalStored $ "respond"
+responds str = do
+    (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+    let mons = M.unions . M.elems <$> msons
     let ons :: [(String, (Bool, Int, String))]
         ons = sortBy (comparing $ snd3 . snd) $ maybe mempty M.toList mons
+    liftIO $ print $ map fst ons
     ons' <- flip filterM ons $ \(match, (ins, n, resp)) -> deci . decide $ do
         let regex = mkRegexWithOpts match False ins
         emins <- try $ return $! matchRegex regex $ T.unpack str
+        verb ("onMatch: " <> show emins)
         when (isLeft emins) $ do
-            verb ("onMatch: " <> show emins)
             left False
         let mins = either (const $ Just []) id emins
         unless (isJust mins) $ left False
         right True
-    return . T.pack . intercalate ", " . map wrap . map fst $ ons'
+    let matchOns = map (wrap . fst) ons'
+        allOns = map (wrap . fst) ons
+    return . T.pack . intercalate ", " $ matchOns <|< allOns
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)
     deci :: Mind (Either Bool Bool) -> Mind Bool
     deci m = m >>= return . either id id
-    wrap t = "/" <> t <> "/"
+    wrap t = andmconcat ["/", t, "/"]
 
 frespond :: Func
 frespond str = do
-    mons <- readLocalStored "respond"
+    (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+    let mons = M.unions . M.elems <$> msons
     let mon :: Maybe (Bool, Int, Text)
-        mon = join $ M.lookup str <$> mons
-        on = maybe "" trd mon
+        mon = join $ M.lookup key <$> mons
+        on = maybe "" (view _3) mon
     return on
   where
     key = T.init . T.tail $ str
-    trd (_, _, x) = x
+
+prespond :: Func
+prespond str = do
+    (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+    let mons = M.unions . M.elems <$> msons
+    let mon :: Maybe (Bool, Int, Text)
+        mon = join $ M.lookup key <$> mons
+        on = maybe "" (T.pack . show . view _2) mon
+    return on
+  where
+    key = T.init . T.tail $ str
 
 -- FIXME restarting takes a while, is probably because of STM
 -- | Restart the bot.
@@ -1007,6 +1260,22 @@ tell str = do
     (nick, msg') = bisect (== ' ') str
     msg c = T.take 400 msg' <> " (from " <> c <> ")"
 
+unixtime :: Func
+unixtime str = T.pack . show . floor <$> liftIO getPOSIXTime
+
+formattime :: Func
+formattime  str = do
+    let utct = posixSecondsToUTCTime . fromIntegral $ read tstamp
+        offset = if maybe False (== '-') $ headMay tzone
+                    then readDef 0 tzone
+                    else readDef 0 $ dropWhile (=='+') tzone
+        loct = utcToLocalTime (TimeZone offset False "JST") utct
+        locale = defaultTimeLocale
+    pure . T.pack $ formatTime locale format loct
+  where
+    (tstamp, str') = over _1 T.unpack $ bisect (== ' ') str
+    (tzone, format) = over both T.unpack $ bisect (== ' ') str'
+
 -- | Website title fetching function.
 title :: Func
 title str = do
@@ -1066,15 +1335,15 @@ urbandict :: Func
 urbandict str = do
     let burl = "http://api.urbandictionary.com/v0/define?term="
     jsonStr <- httpGetString (burl ++ T.unpack str)
-    let mres :: Maybe (JSObject JSValue)
-        mres = resultMay $ decode jsonStr
+    let mres :: Maybe (J.JSObject J.JSValue)
+        mres = resultMay $ J.decode jsonStr
         def = maybe "" id $ do
             o <- mres
-            jlist <- lookup "list" $ fromJSObject o
+            jlist <- lookup "list" $ J.fromJSObject o
             jarr <- join . fmap (`atMay` 0) $ arrayMay jlist
-            ar <- fromJSObject <$> objectMay jarr
+            ar <- J.fromJSObject <$> objectMay jarr
             jdef <- lookup "definition" ar
-            fromJSString <$> stringMay jdef
+            J.fromJSString <$> stringMay jdef
     mwhen (not $ null def) $ do
         return $ str <> ": " <> T.replace "\n" " | " (T.pack def)
 --  where
@@ -1096,7 +1365,7 @@ verbosity :: Func
 verbosity str = do
     if T.null $ T.strip str
     then T.pack . show . stConfVerb <$> readConfig
-    else mwhenUserStat (== Root) $ do
+    else mwhenUserStat (== BotOwner) $ do
         mapConfig $ \c -> c { stConfVerb = let v = stConfVerb c
                                                mv = readMay $ T.unpack str
                                            in maybe v id mv
@@ -1110,41 +1379,58 @@ voice str = mode $ "+" <> vs <> " " <> T.unwords nicks
     nicks = T.words str
     vs = T.replicate (length nicks) "v"
 
--- XXX isn't this in danger of recursing forever?
--- TODO
+
+data WikiPage = WikiPage { wikipPageid :: !Int
+                         , wikipNs :: !Int
+                         , wikipTitle :: !Text
+                         , wikipExtract :: !Text
+                         }
+                         deriving (Generic, Show)
+instance FromJSON WikiPage where
+    parseJSON = lowerFromJSON 5
+
+data WikiQuery = WikiQuery { wikiqNormalized :: Maybe Value
+                           , wikiqRedirects :: Maybe Value
+                           , wikiqPages :: Map Text WikiPage
+                           }
+                           deriving (Show, Generic)
+instance FromJSON WikiQuery where
+    parseJSON = lowerFromJSON 5
+
+data WikiBase = WikiBase { wikiBatchcomplete :: !Text
+                         , wikiQuery :: !WikiQuery
+                         }
+                         deriving (Show, Generic)
+instance FromJSON WikiBase where
+    parseJSON = lowerFromJSON 4
+
 -- | Wikipedia summary fetching.
 wiki :: Func
 wiki str = do
     let (lang', str') = bisect (== ' ') str
-        (lang, str'') = if isLang lang' && not (T.null $ T.strip str')
+        (lang, queryStr) = if isLang lang' && not (T.null $ T.strip str')
                         then (lang', str')
                         else ("en", str)
-        burl = "https://" <> lang <> ".wikipedia.org/w/index.php?search="
-        url = T.unpack $ burl <> T.replace "+" "%20" str''
-    html <- liftIO $ httpGetString url
-    let xml = fromMaybeElement $ parseXMLDoc html
-        qA = QName "a" Nothing Nothing
-        qDiv = QName "div" (Just "http://www.w3.org/1999/xhtml") Nothing
-        qMwcontent = [attr "id" "mw-content-text"]
-        element = fromMaybeElement $ findElementAttrs qDiv qMwcontent xml
-        qPar = QName "p" Nothing Nothing
-        ulPar = QName "ul" Nothing Nothing
-        intro = findChild qPar element
-        alts = fromMaybeElement $ findChild ulPar element
-        atext = elemsText . fromMaybeElement $ findElement qA alts
-        qMwsearch = [attr "class" "mw-search-result-heading"]
-        search = findElementAttrs (QName "div" Nothing Nothing) qMwsearch element
-        sresults = fromMaybeElement $ search
-        stext = elemsText . fromMaybeElement $ findElement qA sresults
-        text = elemsText . fromMaybeElement $ intro
-    case () of
-      _ | isJust search -> wiki $ T.pack stext
-        | isMulti text -> wiki $ T.pack atext
-        | otherwise -> return . T.strip $ T.pack text
+
+        url = concat ["https://"
+                     , T.unpack lang
+                     , ".wikipedia.org/w/api.php"
+                     , "?format=json&action=query&prop=extracts"
+                     , "&exintro=&explaintext=&redirects=1&titles="
+                     , urlEncode $ T.unpack queryStr
+                     ]
+
+        opts = defaults & header "User-Agent" .~ [T.encodeUtf8 version]
+
+    !er <- try $ getWith opts url
+
+    let mextract = do
+            obj <- join $ decode . (^. responseBody) <$> hush er
+            (pg, _) <- M.maxView . wikiqPages $ wikiQuery obj
+            return $ T.take 1000 $ wikipExtract pg
+
+    return $ maybe "" id mextract
+
   where
-    isMulti t = any (`isSuffixOf` t) [ "may refer to:" :: String
-                                     , "can stand for:"
-                                     ]
-    isLang x = T.length x <= 3 || x == "simple"
-    attr t v = Attr (QName t Nothing Nothing) v
+    isLang x = T.length x == 2 || x == "simple"
 

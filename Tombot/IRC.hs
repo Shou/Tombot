@@ -3,7 +3,8 @@
 -- See the file "LICENSE" for more information.
 -- Copyright Shou, 2013
 
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables,
+             PartialTypeSignatures #-}
 
 module Tombot.IRC where
 
@@ -27,15 +28,18 @@ import Control.Monad.Trans.Either (left, right)
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
 import qualified Data.CaseInsensitive as CI
+import Data.IORef
 import Data.List
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import Data.Ord (comparing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (formatTime, getCurrentTime, defaultTimeLocale)
+
+import Database.SQLite.Simple.Types (Null(..))
 
 import System.Random (randomRIO)
 
@@ -100,7 +104,7 @@ remind (Join nick name host d) = unlessBanned $ do
     mrems <- readLocalStored "remind"
     let rem = maybe "" id . join $ M.lookup nick <$> mrems
     server <- sees currServ
-    funcs <- allfuncs
+    funcs <- serverfuncs
     void . forkMi $ do
         kl <- botparse funcs rem
         t <- if kl == mempty then return rem else compile funcs kl
@@ -253,7 +257,7 @@ ctcpVersion irc = do
 -- |
 runLang :: (Text -> Text -> Mind()) -> IRC -> Mind ()
 runLang send (Privmsg nick name host d t) = unlessBanned $ do
-    fs <- allfuncs
+    fs <- serverfuncs
     kl <- botparse fs t
     t <- compile fs kl
     send d t
@@ -271,11 +275,12 @@ printTell send (Privmsg nick _ _ dest text) = unlessBanned $ do
         modLocalStored "tell" $ const users
         send dest $ CI.original nick <> ", " <> fromJust msg
 
--- FIXME
+-- TODO prioritize locals
 -- |
 onMatch :: (Text -> Text -> Mind ()) -> IRC -> Mind ()
 onMatch send irc@(Privmsg nick name host dest text) = unlessBanned $ do
-    mons <- readLocalStored "respond"
+    (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+    let mons = M.unions . M.elems <$> msons
     let ons :: [(String, (Bool, Int, String))]
         ons = sortBy (comparing $ snd3 . snd) $ maybe mempty M.toList mons
     void . decide $ forM_ ons $ \(match, (ins, n, resp)) -> deci . decide $ do
@@ -301,14 +306,10 @@ onMatch send irc@(Privmsg nick name host dest text) = unlessBanned $ do
 logPriv :: IRC -> Mind ()
 logPriv (Privmsg nick name host dest text) = do
     logPath <- stConfLogPath <$> readConfig
-    host <- stServHost . currServ <$> see
     time <- fmap T.pack . liftIO $ do
         formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" <$> getCurrentTime
-    let path = logPath <> host <> " " <> T.unpack dest'
-        msg = T.cons '\n' $ T.intercalate "\t" [time, CI.original nick, text]
-    appendFileSafe path msg
-  where
-    dest' = T.replace "/" "." dest
+
+    insertLog time text nick dest Null
 
 -- }}}
 
@@ -359,7 +360,7 @@ joinInv (Invite nick name host dest chan) = unlessBanned $ do
 adaptNum :: IRC -> Mind ()
 adaptNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     mchan <- M.lookup a <$> sees (stServChans . currServ)
-    let user = Left $ User "" "" "" Online mempty
+    let user = Left $ defUser
         dest = maybe user Right mchan
     sets $ \c -> c { currDest = dest }
   where
@@ -442,7 +443,7 @@ userlistNum (Numeric n ma t) = do
                 susers = maybe mempty id musers
                 stat = maybe Online id $ M.lookup nick susers
                 mu' = flip fmap mu $ \u -> u { userStat = stat }
-                user = fromJust $ mu' <|> Just (User nick "" "" stat chans)
+                user = fromJust $ mu' <|> Just (User nick "" "" "" "" stat chans)
             modUserlist $ M.insert nick user
             when (stat > Online) $ return ()
                 --putPrivmsg $ "nickserv status " <> CI.original nick

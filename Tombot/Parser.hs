@@ -31,8 +31,8 @@ import qualified Data.Attoparsec.Text as A
 import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.List
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import Data.Ord

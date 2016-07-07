@@ -17,6 +17,7 @@ module Tombot.Discord
 import qualified Tombot.Hub as Tombot
 import qualified Tombot.IRC as Tombot
 import qualified Tombot.Parser as Tombot
+import Tombot.Types (lowerFromJSON, lowerToEncoding, lowerToJSON)
 import qualified Tombot.Types as Tombot
 import qualified Tombot.Utils as Tombot
 
@@ -35,8 +36,8 @@ import qualified Data.CaseInsensitive as CI
 import Data.IORef
 import Data.List (isPrefixOf)
 import qualified Data.HashMap as HM
-import Data.Map (Map)
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, listToMaybe)
 import Data.String (IsString(..))
 import Data.Text (Text)
@@ -208,18 +209,6 @@ instance FromJSON TypingStart where
     parseJSON = lowerFromJSON 7
 
 
-lowerFromJSON n = genericParseJSON opts
-  where
-    opts = defaultOptions { fieldLabelModifier = map toLower . drop n }
-
-lowerToJSON n = genericToJSON opts
-  where
-    opts = defaultOptions { fieldLabelModifier = map toLower . drop n }
-
-lowerToEncoding n = genericToEncoding opts
-  where
-    opts = defaultOptions { fieldLabelModifier = map toLower . drop n }
-
 -- }}}
 
 
@@ -308,7 +297,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
                                   }
         chans = [ (chan, stChan) ]
         nick = maybe "idiot" id . M.lookup "username" $ messagecAuthor d
-        user = Tombot.User (CI.mk nick) "" "" Tombot.Online (M.singleton chan "")
+        user = Tombot.User (CI.mk nick) "" "" "" "" Tombot.Online (M.singleton chan "")
         server = Tombot.StServer { Tombot.stServHost = "discordapp.com"
                                  , Tombot.stServPort = 443
                                  , Tombot.stServChans = chans
@@ -340,14 +329,6 @@ onMessage conn dsptch@(Dispatch op d s t) = do
     send chan msg = when (not $ T.null msg) $ do
         let msgObj = M.singleton "content" msg :: Map Text Text
         liftIO $ sendHTTP (messageURL $ T.unpack chan) (encode msgObj)
-    messages = [ "HHAHAAH FARTY"
-               , "\\*POOPS\\*"
-               , "POOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO"
-               , "MOMMY"
-               , "HAHAHAHAHAHAHAHAHA"
-               , "STINKY!!!!!!!!!!!!!!!"
-               , "POO POO POO POO POO POO POO POO"
-               ] :: [Text]
 
 websockLoop conn = do
     identify (Identify (fromString botToken) props False 50 [0, 1]) conn
