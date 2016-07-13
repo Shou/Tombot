@@ -1,34 +1,40 @@
 Tombot
 ======
 
-This is the successor to [KawaiiBot-hs](https://github.com/Shou-/KawaiiBot-hs).
-Tombot is an IRC bot that does useless things,
-such as grabbing information about anime and manga, having its own small
-composable language and much more.
+Tombot is a general textual bot with interfaces to IRC and Discord. It has its
+own small composable interpreted language.
 
-See `Config.example.hs` for options.
+    :say Hey, ++ space ++ nick ++ say !
+    :(random 10 == say 5 >< say It's five!) <> say It's not five.
+
+Interfaces to various APIs.
+
+    :wiki Haskell programming language
+    :anime Jojo's Bizarre Adventure
+
+User-definable functions.
+
+    :let utctime :formattime <- unixtime ++ space ++ >0 %c
+
+Timed events and reactive events.
+
+    :every 3600 :airing
+    :sleep 100 >> say Hello!
+    :on /^what time is it/i :utctime
 
 ## Install
 
-To install, run `cabal install` in the root of her directory.
-This assumes you have <a href=http://haskell.org/>Haskell Platform</a>
-installed; if not, go install it.
+You can install Tombot with `[http://haskellstack.org/](stack)`.
 
-## Kawaiilang
-
-The bot comes with its own small language that can be used for various things.
-The language is supposed to be composable through the use of operators.
-An example of the syntax: `:(ra True| >< gay Hi!) <> gay Bye!` where `ra` and
-`gay` are functions, the subsequent texts are their arguments and `><` and `<>`
-are operators. Parentheses are also supported to enclose functions, and are
-useful because operators are left associative.
+    stack install
 
 ## Functions
 
-A line using her functions need to be prefixed with `.` or `:` by default.
+`This section is outdated`
 
-Along with these functions a user may define new functions using `let`, and you
-can use `help` to see what those functions are.
+A line using her functions need to be prefixed with `:` by default.
+
+* `help`
 
 * `!`
 Search DuckDuckGo using a !bang tag.<br>
@@ -40,7 +46,7 @@ Displays a message to the channel, or user if it is a private message.<br>
 
 * `<`
 Displays a message to the user.<br>
-`< <string>` `:< Psst, Tombot! Please print some kawaii messages.`
+`< <string>` `:< Psst, Tombot! Please print some secret messages.`
 
 * `^`
 Searches for a message in the bot's chatlog.<br>
@@ -207,8 +213,6 @@ Display, append to, strip from, or set the channel's topic. `op`<br>
 Display or change the channel's ChanAutoJoin value. `op`<br>
 `cajoin [True | False]`
 
-* `cutify`
-
 * `prefix`
 Display or change the bot's KawaiiLang prefix characters. `op`<br>
 `prefix [<char> ...]` `prefix .:!`
@@ -216,8 +220,6 @@ Display or change the bot's KawaiiLang prefix characters. `op`<br>
 * `romaji`
 Convert Japanese syllabaries to Romaji.<br>
 `romaji <string>` `:romaji あなたを食べたい`
-
-* `britify`
 
 * `connect`
 
@@ -276,9 +278,4 @@ This is the file that is filled with ons from the `on` function, which are
 regex matches and the Kawaiilang to run on match.
 
 * `letfuncs`
-
-
-⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨⑨
-<br>
-♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡♡
 
