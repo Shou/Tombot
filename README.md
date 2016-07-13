@@ -24,7 +24,7 @@ Timed events and reactive events.
 
 ## Install
 
-You can install Tombot with `[http://haskellstack.org/](stack)`.
+You can install Tombot with [`stack`](http://haskellstack.org/).
 
     stack install
 
