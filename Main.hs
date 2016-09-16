@@ -4,7 +4,6 @@
 -- Copyright Shou, 2013
 
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 module Main where
 
@@ -29,12 +28,7 @@ import System.IO
 -- }}}
 
 -- XXX
--- - Store data as pure Haskell code in files, specifically for the Funcs.
---      - This means we don't need to make parsers and whatnot, we already have
---        GHC for that through Language.Haskell.Interpreter.
---      - There are no drawbacks other than requiring GHC to be installed, I
---        think?
---      - We can store functions there as well, which is great.
+-- - Use Aeson for configuration files
 -- - Look for patterns and repetitions and make generic functions.
 -- - Keeping file descriptors/handles/sockets
 --      - Ok, the basic approach is that fork() (the C call) doesn't close file
@@ -99,10 +93,7 @@ import System.IO
 --          - Yes, execute things but keep the TMVar available, then update the
 --            data once it finishes executing that, i.e. Funcs.
 --              - Make an instance for this too.
--- - 4chan searching
---      - If only one matching thread, print its information.
---          - Prerequisite to this is to allow ID searching.
--- - Haskell evaluator; mueval
+-- - Calculator function
 
 -- FIXME
 -- - handle Handle errors and rejoin.
@@ -110,17 +101,19 @@ import System.IO
 --      - Default Channel funcs.
 --          - We don't want her to be completely useless in a channel, but no
 --            dangerous funcs either; specifically network ones.
--- - Load UserStat from file.
+-- - Load UserStat from database.
 --      - Now we just need to be able to set it somewhere.
 -- - Make a function `adapt' that takes a nick and a channel and does its magic
 --      - Just be careful not to use the wrong adapt somewhere, like on KICK or
 --        QUIT
+--      - Is this like an onevent?
 -- - Taken NICK isn't working properly.
 -- - Empty channel name might be inserted on NICK or QUIT.
 -- - User status will be Online if the User PARTs from all channels the bot is
 --   in and then quitting.
 --      - Make the user appear Offline when absent from the bot.
 -- - TMVar lock
+--      - Happens when you try to read an empty TMVar or put a filled TMVar
 -- - Function permissions are not configurable at runtime.
 -- - Disallow recursive functions, such as `:let test :test'.
 --      - Only allow n recursions instead.
@@ -133,7 +126,7 @@ import System.IO
 --      - This might be helpful when validating functions.
 -- - Lessen the amount of reads/writes from the TMVar
 --      - We can run many functions without reading/writing from/to the TMVar,
---        just like that~
+--        just like that
 --          - For example `echo'.
 --          - Readers usually(?) don't need to read directly from the TMVar.
 --          - Setters need to write directly to the TMVar.
@@ -155,6 +148,12 @@ import System.IO
 -- - Privilege system
 --      - Review the functions
 
+
+main2 = do
+    -- TODO
+    config <- return $ Config {}
+    servs <- atomically $ readTMVar tmservers
+    forM_ servs $ forkIO . ($ config)
 
 main :: IO ()
 main = do
@@ -179,10 +178,10 @@ userInput ct = loop $ do
     flip (maybe $ return ()) ms $ \st -> void . liftIO . flip runStateT st $ do
         let irc = Privmsg "Tombot" "" "" channel message
         adaptPriv irc
-        let user = User "Tombot" "Tombot" "" "" "botnet.fbi.gov" BotOwner M.empty
+        let user = User "Tombot" "Tombot" "" Nothing "botnet.fbi.gov" BotOwner M.empty
         sets $ \c -> c { currUser = user }
         runLang putPrivmsg irc
   where
     loop :: StateT (Maybe (TMVar Current)) IO () -> IO ()
-    loop m = void . flip runStateT Nothing $ forever $ m
+    loop m = void . flip runStateT Nothing $ forever m
 

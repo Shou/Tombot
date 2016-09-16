@@ -443,7 +443,7 @@ userlistNum (Numeric n ma t) = do
                 susers = maybe mempty id musers
                 stat = maybe Online id $ M.lookup nick susers
                 mu' = flip fmap mu $ \u -> u { userStat = stat }
-                user = fromJust $ mu' <|> Just (User nick "" "" "" "" stat chans)
+                user = fromJust $ mu' <|> Just (User nick "" "" Nothing "" stat chans)
             modUserlist $ M.insert nick user
             when (stat > Online) $ return ()
                 --putPrivmsg $ "nickserv status " <> CI.original nick

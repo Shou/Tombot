@@ -5,7 +5,7 @@
 
 {-# LANGUAGE OverloadedStrings, DoAndIfThenElse, BangPatterns,
              TupleSections, ScopedTypeVariables, DeriveGeneric,
-             PartialTypeSignatures #-}
+             PartialTypeSignatures, TypeOperators, TypeFamilies #-}
 
 module Tombot.Funcs (funcs) where
 
@@ -27,6 +27,7 @@ import Control.Lens as L hiding (sets)
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Trans.Either (left, right)
+import Control.Type.Operator
 
 import Data.Aeson
 import Data.Attoparsec.Text (Parser)
@@ -35,7 +36,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
 import qualified Data.ByteString.UTF8 as BU
 import qualified Data.CaseInsensitive as CI
-import Data.Char
+import Data.Char (toLower, isLower, isAlphaNum)
 import Data.Coerce
 import Data.IORef
 import Data.List
@@ -52,6 +53,8 @@ import Data.Time (utcToLocalTime, formatTime, defaultTimeLocale
                  , TimeZone(..)
                  )
 import Data.Time.Clock.POSIX
+import Data.Vector (Vector)
+import qualified Data.Vector as V
 
 import Debug.Trace
 
@@ -81,38 +84,39 @@ import Text.XML.Light
 funcs :: Map Text Funk
 funcs = toFunks [ ("!", ddg, Online)
                 , ("b", ban, Mod)
-                , (">", echo, Online)
+                , ("say", echo, Online)
                 , ("<", priv, Online)
-                , ("k", kick, Mod)
-                , ("m", mode, Mod)
-                , ("v", voice, Mod)
-                , ("x", exchange, Online)
-                , ("^", findMsg, Online)
+                , ("kick", kick, Mod)
+                , ("mode", mode, Mod)
+                , ("voice", voice, Mod)
+                , ("currency", exchange, Online)
+                , ("find", findMsg, Online)
+                , ("food", food, Online)
                 , ("me", me, Online)
-                , ("np", lastfm, Online)
+                , ("lastfm", lastfm, Online)
                 , ("in", match, Online)
-                , ("ma", manga, Online)
-                , ("ai", airing, Online)
-                , ("an", anime, Online)
-                , ("ra", random, Online)
-                , ("re", remind, Online)
-                , ("kb", kickban, Mod)
+                , ("manga", manga, Online)
+                , ("airing", airing, Online)
+                , ("anime", anime, Online)
+                , ("random", random, Online)
+                , ("remind", remind, Online)
+                , ("kickban", kickban, Mod)
                 , ("on", respond, Online)
-                , ("us", userlist, Mod)
-                , ("tr", translate, Online)
+                , ("users", userlist, Online)
+                , ("translate", translate, Online)
                 , ("ops", ops, Online)
-                , ("onf", frespond, Online)
-                , ("onp", prespond, Online)
-                , ("ons", responds, Online)
+                , ("onfunction", frespond, Online)
+                , ("onpriority", prespond, Online)
+                , ("onsearch", responds, Online)
                 , ("raw", raw, BotOwner)
                 , ("sed", sed, Online)
-                , ("len", count, Online)
+                , ("length", count, Online)
                 , ("let", store, Online)
-                , ("urb", urbandict, Online)
+                , ("urban", urbandict, Online)
                 , ("bots", bots, Online)
                 , ("eval", eval, Online)
                 , ("help", help, Online)
-                , ("hist", history, Online)
+                , ("history", history, Online)
                 , ("host", host, Online)
                 , ("http", http, Online)
                 , ("isup", isup, Online)
@@ -129,20 +133,21 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("part", partchan, Mod)
                 , ("verb", verbosity, Admin)
                 , ("cjoin", cjoin, Online)
-                , ("event", event, Online)
+                , ("every", event, Online)
                 , ("fstat", fstat, Mod)
-                , ("funcs", list, Online)
+                , ("functions", list, Online)
                 , ("kanji", kanji, Online)
-                , ("nicks", nicks, Admin)
+                , ("botnicks", nicks, Admin)
                 , ("sleep", sleep, Online)
                 , ("title", title, Online)
                 , ("topic", topic, Online)
                 , ("cajoin", cajoin, Online)
                 , ("markov", markov, Online)
-                , ("prefix", prefix, Online)
+                , ("botprefixes", prefix, Online)
                 , ("romaji", romaji, Online)
                 , ("connect", connectIRC, Admin)
-                , ("reverse", rwords, Online)
+                , ("predict", predict, Online)
+                , ("mirror", rwords, Online)
                 , ("restart", restart, BotOwner)
                 , ("shadify", shadify, Online)
                 , ("version", \_ -> return version, Online)
@@ -551,6 +556,55 @@ findMsg str = onlyMsg <$> history str
   where
     onlyMsg = snd . bisect (== '\t') . snd . bisect (== '\t')
 
+
+data Food2search = Food2search { food2count :: Int
+                               , food2recipes :: Vector Food2recipe
+                               }
+                               deriving (Generic, Show)
+instance FromJSON Food2search where
+    parseJSON = lowerFromJSON 5
+
+data Food2recipe = Food2recipe { food2publisher :: Text
+                               , food2f2f_url :: Text
+                               , food2title :: Text
+                               , food2source_url :: Text
+                               , food2recipe_id :: Text
+                               , food2image_url :: Text
+                               , food2social_rank :: Float
+                               , food2publisher_url :: Text
+                               }
+                               deriving (Generic, Show)
+instance FromJSON Food2recipe where
+    parseJSON = lowerFromJSON 5
+
+-- | Food2fork random recipe by searching
+food :: Func
+food str = do
+    food2key <- maybe "" id <$> getAPIKey "food2fork"
+
+    let opts = defaults
+             & param "key" .~ [food2key]
+             & param "q" .~ [str]
+        surl = "http://food2fork.com/api/search"
+
+    er <- try $ getWith opts surl
+
+    -- NOTE The API returns AT MOST 30 results per page
+    n <- liftIO $ randomRIO (0, 29)
+
+    let mfood = do
+            obj <- join $ decode . (^. responseBody) <$> hush er
+
+            let recipes = food2recipes obj
+            recipe <- recipes V.!? n
+
+            return $ mconcat [ food2title recipe
+                             , ": "
+                             , food2f2f_url recipe
+                             ]
+
+    return $ maybe "" id mfood
+
 -- TODO
 -- | Function Stat return/change.
 fstat :: Func
@@ -781,7 +835,6 @@ help str = do
              then "help"
              else T.strip $ T.toLower str
 
--- TODO FIXME per-chanel logs
 -- XXX we may be able to use SQL queries to search???
 -- | Search the bot's logs and return a matching message if any.
 history :: Func
@@ -792,19 +845,24 @@ history str = do
         string = maybe str (const str') mn
         (matches, filters) = wordbreaks ((== '-') . T.head) string
         filters' = map (T.pack . tailSafe . T.unpack) filters
+
     edest <- sees currDest
     let dest = either origNick stChanName edest
+
     (rts :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
     let ts = do
-            (date, mesg, nick, chnl, miden) <- rts
-            let t = date <> "\t" <> "\t" <> mesg
+            (date, mesg, nick, chnl, miden) <- reverse rts
+            let t = date <> "\t" <> nick <> "\t" <> mesg
             guard $ if null matches then True
                     else all (`T.isInfixOf` t) matches
             guard $ if null filters' then True
                     else not $ any (`T.isInfixOf` t) filters'
             guard $ dest == chnl
+
             return t
+
         mt = ts `atMay` n
+
     return $ maybe "" id mt
 
 -- TODO strip non-letters
@@ -812,34 +870,162 @@ history str = do
 -- XXX search str in rls, up to strength defined in "s"
 markov :: Func
 markov str = do
-    let args = take 1 $ T.words str
-    (rls :: [(Text, Text, Text)]) <- queryLogs
-    let mesgs = map (view _3) rls
-        f :: Text -> [[Text]]
-        f t = map (take (s*2)) . takeWhile ((>=(s*2)) . length) $ scanl (\b _ -> drop 1 b) (T.words t) [0 ..]
-        chains :: [[Text]]
-        chains = join $ map f mesgs
-        fchains = filter (T.isInfixOf str . T.unwords) chains
-    n <- liftIO $ randomRIO (0, length fchains - 1)
-    rlen <- liftIO $ randomRIO (5, 20)
-    let mchain = fchains `atMay` n
-    generated <- T.unwords . join <$> maybe (pure []) (chainer rlen chains) mchain
+    let args = V.take s . V.fromList $ T.words str
+    (rls :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
+
+    let mesgs = V.map (view _2) $ V.fromList rls
+        -- Generate all s length word combinations of a message
+        f :: Text -> Vector $ Vector Text
+        f t = let ws = V.fromList $ T.words t
+                  ns = V.iterateN (V.length ws) (+1) 0
+                  noShorts = V.takeWhile ((>=(s*2)) . V.length)
+                  wordGroups = V.scanl (\b _ -> V.drop 1 b) ws ns
+              in V.map (V.take (s*2)) . noShorts $ wordGroups
+        chains :: Vector $ Vector Text
+        chains = join $ V.map f mesgs
+
+    -- Random starting chain
+    n <- liftIO $ randomRIO (0, V.length chains - 1)
+    -- String chains to use, i.e. total length of words * s?
+    rlen <- liftIO $ randomRIO (10, 50)
+
+    -- Use user supplied string if it isn't empty or just whitespace
+    let mchain = Just args >|> ((args <|<) <$> chains `V.indexM` n)
+
+    generated <- T.unwords . V.toList . join <$> maybe (pure mempty) (chainer rlen chains) mchain
+
+    liftIO $ do
+        putStrLn ""
+        print (take 5 rls)
+        print (V.take 5 chains)
+        print n >> print rlen >> print mchain
+        putStrLn ""
+
     return generated
+
   where
-    s = 3 -- XXX markov chain strength
-    matcher :: [Text] -> [[Text]] -> [[Text]]
+    s = 2 -- XXX markov chain strength
+    matcher :: vt ~ Vector Text => vt -> Vector vt -> Vector vt
     matcher c cs = do
         cm <- cs
-        guard $ not (null c || null cm)
-        guard $ map CI.mk (drop s c) == map CI.mk (take s cm)
+        guard $ not (V.null c || V.null cm)
+        let ciAlphaNums = V.map (CI.mk . T.filter isAlphaNum)
+        guard $ ciAlphaNums (V.drop s c) == ciAlphaNums (V.take s cm)
         return cm
-    chainer :: Int -> [[Text]] -> [Text] -> Mind [[Text]]
-    chainer 0 cs c = pure [c]
+    chainer :: vt ~ Vector Text => Int -> Vector vt -> vt -> Mind $ Vector vt
+    chainer 0 cs c = pure $ V.singleton c
     chainer n cs c = do
         let mcs = matcher c cs
-        n <- liftIO $ randomRIO (0, length mcs - 1)
-        let mc = mcs `atMay` n
-        maybe (pure [c]) (\jc -> (take s c :) <$> chainer (n-1) cs jc) mc
+        liftIO $ print (V.length mcs)
+        n <- liftIO $ randomRIO (0, V.length mcs - 1)
+        let mc = mcs `V.indexM` n
+        maybe (pure $ V.singleton c) (\jc -> (V.take s c `V.cons`) <$> chainer (n-1) cs jc) mc
+
+-- XXX use a cache for the predictions (and corpus?)
+predict :: Func
+predict str = do
+    (rls :: [(Text, Text, Text, Text, Maybe Text)]) <- liftIO queryLogs
+
+    stime <- liftIO $ do
+        putStrLn "PREDICTING"
+        getPOSIXTime
+
+    let msgs :: [Text]
+        !msgs = map (view _2) rls
+
+        vmsgs :: Vector Text
+        !vmsgs = V.fromList msgs
+
+        pt :: Map Idiom $ Vector $ Map Idiom Int
+        pt = makePredictionTree vmsgs
+
+        totalMsgs :: Int
+        !totalMsgs = V.length vmsgs
+
+        -- XXX what do we do with the total count (snd)
+        corpus :: Map Idiom (Int, Int)
+        corpus = makeCorpus msgs
+
+        countIdiomMsgs :: Idiom -> Int
+        countIdiomMsgs w = maybe 0 fst $ M.lookup w corpus
+
+        getIdiomSuccessors :: Idiom -> Maybe $ Vector $ Map Idiom Int
+        getIdiomSuccessors = flip M.lookup pt
+
+        lvmws :: [Vector $ Map Idiom Int]
+        lvmws = do
+            Just mws <- map (getIdiomSuccessors . mkIdiom) $ T.words str
+            return mws
+
+        mergeWith :: Monoid a
+                   => (a -> a -> a) -> Vector a -> Vector a -> Vector a
+        mergeWith f xs ys =
+            let pxs = xs <> V.replicate (V.length ys - V.length xs) mempty
+                pys = ys <> V.replicate (V.length xs - V.length ys) mempty
+            in V.zipWith f pxs pys
+
+        merger :: v ~ (Vector $ Map Idiom Int) => (Int, v) -> v -> v
+        merger (i, v) av =
+            let f ma mb = M.intersectionWith (+) ma mb <> ma
+            in mergeWith f (V.replicate i mempty <> v) av
+
+        merged :: Vector $ Map Idiom Int
+        merged = foldr merger mempty $ zip [0 .. ] lvmws
+
+        pickWord mws = do
+            let listWords = M.toList mws
+                probs = do
+                    (w, prob) <- listWords
+                    let tf = fromIntegral prob
+                        n = fromIntegral totalMsgs
+                        nt = fromIntegral $ countIdiomMsgs w
+                        idf = log $ 1 + (n / nt)
+                    when (isInfinite nt) $ do
+                        traceM (show nt) >> traceM (show idf)
+                    when (nt == 0) $ traceM $ show w <> " doesn't exist?"
+                    return . ceiling $ tf + idf
+
+            mn <- randomIndexMay probs
+
+            return . fmap fst . join $ atMay listWords <$> mn
+
+        -- XXX verify the newMerged index used in f
+        step :: t ~ (Maybe Idiom, Vector $ Map Idiom Int)
+             => t -> Int -> Mind t
+        step (Nothing, merged) _ = return (Nothing, merged)
+        step (Just oldIdiom, oldMerged) i = do
+            let mayNewMerged = do
+                    idiomSuccs <- getIdiomSuccessors oldIdiom
+                    return $ merger (i, idiomSuccs) oldMerged
+
+                m :: Map Idiom Int
+                m = maybe mempty id . join $ fmap (V.!? i) mayNewMerged
+
+            mayNewWord <- pickWord m
+
+            return (mayNewWord, maybe oldMerged id mayNewMerged)
+
+    -- XXX verify that predictions are merged with AND
+    -- XXX use head of `T.words str`?
+    -- XXX words length is inaccurate
+    len <- liftIO $ randomRIO (1, 100)
+    let is = [length lvmws .. length lvmws + len]
+    prediction <- scanM step (fmap mkIdiom . lastMay $ T.words str, merged) is
+
+    let lastMerged = maybe merged id $ snd <$> lastMay prediction
+        predWords = tailSafe . catMaybes $ map (fmap origIdiom . fst) prediction
+
+    liftIO $ do
+        putStr "DONE PREDICTING "
+        print =<< fmap (flip (-) stime) getPOSIXTime
+
+    return $ T.unwords predWords
+
+  where
+    randomIndexMay probs = do
+        let uniProbs = join $ map (uncurry replicate) $ zip probs [0..]
+        n <- liftIO $ randomRIO (0, length uniProbs - 1)
+        return $ atMay uniProbs n
 
 -- | The current user's hostname
 host :: Func
@@ -1231,6 +1417,7 @@ store str = do
     mlfuncs <- readLocalStored "letfuncs" :: Mind (Maybe (Map Text Text))
     let lfuncs = maybe mempty id mlfuncs
         isStored = M.member name lfuncs
+        inserter :: a -> Map Text a -> Map Text a
         inserter f = if T.null $ T.strip func
                      then M.delete name
                      else M.insert name f
@@ -1351,9 +1538,10 @@ urbandict str = do
 
 -- | Print the channel's userlist.
 userlist :: Func
-userlist _ = mwhenPrivileged $ do
+userlist _ = do
     edest <- sees $ currDest
     users <- sees $ M.elems . stServUsers . currServ
+    liftIO $ putStrLn "Users" >> print edest >> print users
     return $ either origNick (chanNicks users) edest
   where
     chanNicks us c = let nicks = filter (M.member (stChanName c) . userChans) us
@@ -1423,6 +1611,8 @@ wiki str = do
         opts = defaults & header "User-Agent" .~ [T.encodeUtf8 version]
 
     !er <- try $ getWith opts url
+
+    when (isLeft er) $ liftIO $ print er
 
     let mextract = do
             obj <- join $ decode . (^. responseBody) <$> hush er

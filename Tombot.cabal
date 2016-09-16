@@ -21,6 +21,7 @@ Executable tombot
         base,
         case-insensitive,
         containers,
+        data-default,
         direct-sqlite,
         directory,
         either,

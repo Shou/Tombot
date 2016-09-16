@@ -3,13 +3,10 @@
 -- See the file "LICENSE" for more information.
 -- Copyright Shou, 2013
 
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE DeriveGeneric, FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving, ScopedTypeVariables,
+             TypeSynonymInstances, FlexibleInstances,
+             DeriveGeneric, FlexibleContexts,
+             TemplateHaskell #-}
 
 module Tombot.Types where
 
@@ -20,6 +17,7 @@ import Control.BoolLike ( Falsifier(..), Andlike(..), Orlike(..)
                         )
 import Control.Concurrent (ThreadId)
 import Control.Concurrent.STM
+import Control.Lens (makeLenses)
 import Control.Monad.State
 import Control.Monad.Trans.Either (EitherT)
 
@@ -28,11 +26,14 @@ import Data.Aeson.Types
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Char (toLower)
+import Data.Default
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (POSIXTime)
 import Data.Typeable (Typeable)
 import Data.Typeable.Internal
+import Data.Vector (Vector)
+import qualified Data.Vector as V
 
 import qualified Database.SQLite.Simple.ToField as Q
 
@@ -64,35 +65,23 @@ lowerToEncoding n = genericToEncoding opts
 -- }}}
 
 
+instance Orlike (Vector a) where
+    (<|<) va vb | V.null va = vb
+                | otherwise = va
+
+
+data Allowed a = Blacklist !a
+               | Whitelist !a
+               deriving (Read, Show, Generic)
+
+instance FromJSON a => FromJSON (Allowed a)
+
 instance Functor Allowed where
     fmap f (Blacklist a) = Blacklist $ f a
     fmap f (Whitelist a) = Whitelist $ f a
 
 instance Show (TMVar a) where
     show x = "TMVar _"
-
-instance Show StConfig where
-    show x = let verb = show $ stConfVerb x
-                 dir = show $ stConfDir x
-                 log = show $ stConfLog x
-                 logpath = show $ stConfLogPath x
-                 path = show $ stConfPath x
-                 servs = show $ stConfServs x
-             in concat [ "StConfig {stConfVerb = "
-                       , verb
-                       , ", stConfDir = "
-                       , dir
-                       , ", stConfLog = "
-                       , log
-                       , ", stConfLogPath = "
-                       , logpath
-                       , ", stConfPath = "
-                       , path
-                       , ", stConfFuncs = _"
-                       , ", stConfServs = "
-                       , servs
-                       , "}"
-                       ]
 
 data UserStatus = Offline
                 | Banned
@@ -104,44 +93,45 @@ data UserStatus = Offline
 
 type Mode = [Char]
 
+type Nick = CI Text
+
 -- TODO last activity/online
-data User = User { userNick :: !Nick
-                 , userName :: !Text
-                 , userId :: !Text
-                 , userAvatar :: !Text
-                 , userHost :: !Text
-                 , userStat :: !UserStatus
-                 , userChans :: Map Text Mode
-                 } deriving (Show)
+data User = User { _userNick :: !Nick
+                 , _userName :: !Text
+                 , _userId :: !Text
+                 , _userAvatar :: Maybe Text
+                 , _userHost :: !Text
+                 , _userStat :: !UserStatus
+                 , _userChans :: Map Text Mode
+                 }
+                 deriving (Show)
+
+makeLenses ''User
+
+data Bot = Bot { _botNick :: Text
+               , _botName :: Text
+               , _botId :: Text
+               }
+               deriving (Show)
+
+makeLenses ''Bot
 
 -- XXX what else should a `Channel' hold?
 -- NOTE rejoin on kick with `chanJoin = True`; don't join at all if `False`.
-data Channel = Channel { chanName :: !Text
-                       , chanJoin :: !Bool
-                       , chanAutoJoin :: !Bool
-                       , chanTopic :: !Text
-                       , chanPrefix :: ![Char]
-                       , chanFuncs :: Allowed [Text]
+data Channel = Channel { _chanName :: !Text
+                       , _chanJoin :: !Bool
+                       , _chanAutoJoin :: !Bool
+                       , _chanTopic :: !Text
+                       , _chanPrefix :: ![Char]
+                       , _chanFuncs :: Allowed [Text]
                        } deriving (Show, Generic)
 
+makeLenses ''Channel
+
+instance Default Channel where
+    def = Channel mempty False False mempty [':'] (Whitelist [])
+
 instance FromJSON Channel
-
--- XXX LOL get rid of this
--- | Data that's not supposed to be used in Config.
-data StChannel = StChannel { stChanName :: !Text
-                           , stChanTopic :: !Text
-                           , stChanJoin :: !Bool
-                           , stChanAutoJoin :: !Bool
-                           , stChanMode :: ![Char]
-                           , stChanPrefix :: ![Char]
-                           , stChanFuncs :: Allowed [Text]
-                           } deriving (Show)
-
-data Allowed a = Blacklist !a
-               | Whitelist !a
-               deriving (Read, Show, Generic)
-
-instance FromJSON a => FromJSON (Allowed a)
 
 -- TODO move this to Utils
 fromAllowed :: Allowed a -> a
@@ -158,78 +148,49 @@ fromAssoc (LeftA a) = a
 fromAssoc (RightA a) = a
 fromAssoc (CenterA a) = a
 
-data ServStatus = Connected
-                | Connecting Int
-                -- ^ Time since connection initiated
-                | Disconnected
-                deriving (Show, Eq)
+data ServerStatus = Connected
+                  | Connecting Int
+                  -- ^ Time since connection initiated
+                  | Disconnected
+                  deriving (Show, Eq)
 
 -- TODO servBotNicks
 -- XXX we can generate a random string and append it to the nick, then if there
 --     is a NickServId we will attempt to ghost. Basically generate a random
 --     string every time the current nick is in use.
-data Server = Server { servHost :: !String
-                     , servPort :: !Int
-                     , servChans :: ![Channel]
-                     , servBotNicks :: ![String]
-                     , servBotName :: !String
-                     , servNickServId :: !String
+data Server = Server { _servHost :: !String
+                     , _servPort :: !Int
+                     , _servChans :: ![Channel]
+                     , _servStatus :: ServerStatus
+                     , _servUsers :: Map Text User
                      } deriving (Show)
 
--- XXX consider merging Current and StServer
-data StServer = StServer { stServHost :: !String
-                         , stServPort :: !PortNumber
-                         , stServChans :: Map Text StChannel
-                         , stServBotNicks :: ![Text]
-                         , stServBotName :: !Text
-                         , stServNickServId :: Maybe Text
-                         , stServStat :: !ServStatus
-                         , stServUsers :: !Users
-                         , stServThreads :: Map Text ThreadId
-                         } deriving (Show)
+makeLenses ''Server
 
 -- XXX should we split currConfigTMVar up?
-data Current = Current { currUser :: !User
-                       , currMode :: !Text
-                       , currServ :: !StServer
-                       , currDest :: Either User StChannel
-                       , currConfigTMVar :: TMVar StConfig
-                       , currHandle :: !Handle
-                       , currThreadId :: !ThreadId
-                       } deriving (Typeable)
-
-data Kurrent = Kurrent { kurrUser :: !User
-                       , kurrMode :: !Text
-                       , kurrHost :: !String
-                       , kurrPort :: !Int
-                       , kurrChans :: ![Channel]
-                       , kurrBotNicks :: ![String]
-                       , kurrBotName :: !String
-                       , kurrNickservId :: !String
-                       , kurrDest :: Either User StChannel
-                       , kurrHandle :: !Handle
+data Current = Current { _currUser :: !User
+                       , _currMode :: !Text
+                       , _currServ :: !Server
+                       , _currDest :: Either User Channel
                        }
 
-data Config = Config { confVerbosity :: !Int
+makeLenses ''Current
+
+data Config = Config { _confVerbosity :: !Int
                      -- ^ Verbosity level.
                      -- 0: None
                      -- 1: Warnings
                      -- 2: Verbose
-                     , confDir :: !FilePath
-                     , confLogging :: !Bool
-                     , confLogPath :: !FilePath
-                     , confPath :: !FilePath
-                     , confFuncs :: !Funcs
-                     } deriving (Typeable)
+                     , _confDirectory :: !FilePath
+                     , _confLogging :: !Bool
+                     , _confLogPath :: !FilePath
+                     , _confFile :: !FilePath
+                     }
 
-data StConfig = StConfig { stConfVerb :: !Int
-                         , stConfDir :: !FilePath
-                         , stConfLog :: !Bool
-                         , stConfLogPath :: !FilePath
-                         , stConfPath :: !FilePath
-                         , stConfFuncs :: !Funcs
-                         , stConfServs :: Map String (TMVar Current)
-                         }
+makeLenses ''Config
+
+instance Default Config where
+    def = Config 1 "" True "logs/" "Config.json"
 
 data StFunk = StFunk { stFunkRecs :: !Int
                      , stFunkMax :: !Int
@@ -242,17 +203,15 @@ data Funk = Funk { funkName :: !Text
 
 
 type Mind = StateT (TMVar Current) IO
-type Love = StateT Kurrent IO
 type Decide e = EitherT e Mind
 type Funky = StateT StFunk Mind
 
 type Funcs = Map Text Funk
+-- FIXME move this to the botfuncs source file; don't make it hard to find.
 type Func = Text -> Mind Text
 
 type Modes = Map Text Mode
 type Users = Map Nick User
-
-type Nick = CI Text
 
 instance Q.ToField Nick where
     toField = Q.toField . CI.original

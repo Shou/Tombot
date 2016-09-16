@@ -93,6 +93,7 @@ khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
 --          - : about $$ funcs -> sed s/ /|/ -> ra -> eval
 -- - Instead of operating escaping, we just have functions that take everything
 --   on the right as parameters, irregardless of what it is (op, func, ...)
+--      - Only within parens if present
 
 -- FIXME
 

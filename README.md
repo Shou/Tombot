@@ -22,6 +22,14 @@ Timed events and reactive events.
     :sleep 100 >> say Hello!
     :on /^what time is it/i :utctime
 
+Is is undergoing development and will be unstable. Current focus:
+
+ * Protocol-neutral central interface between IRC/Discord and the bot.
+ * Wiping out space leaks
+ * Natural language generation: `markov`, `predict`
+ * Going from config as a Haskell module to pretty-printed JSON.
+ * Fixing dead functions: `translate`, `romaji`
+
 ## Install
 
 You can install Tombot with [`stack`](http://haskellstack.org/).

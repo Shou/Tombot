@@ -1,7 +1,7 @@
 
 {-# LANGUAGE OverloadedStrings, ScopedTypeVariables, DeriveGeneric,
              TypeOperators, BangPatterns, FlexibleContexts,
-             EmptyDataDecls, OverloadedLists #-}
+             EmptyDataDecls, OverloadedLists, PartialTypeSignatures #-}
 
 -- {{{ Exports
 
@@ -120,8 +120,9 @@ instance ToJSON MessageCreate where
 instance FromJSON MessageCreate where
     parseJSON = lowerFromJSON 8
 
-data User = User { userVerified :: Bool
+data User = User { userVerified :: Maybe Bool
                  , userUsername :: Text
+                 , userMfa_enabled :: Maybe Bool
                  , userId :: Text
                  , userEmail :: Maybe Text
                  , userDiscriminator :: Text
@@ -134,6 +135,20 @@ instance ToJSON User where
     toEncoding = lowerToEncoding 4
 instance FromJSON User where
     parseJSON = lowerFromJSON 4
+
+data Member = Member { memberNick :: Maybe Text
+                     , memberRoles :: [Text]
+                     , memberDeaf :: Bool
+                     , memberMute :: Bool
+                     , memberUser :: User
+                     , memberJoined_at :: Text
+                     }
+                     deriving (Generic, Show)
+
+instance ToJSON Member where
+    toEncoding = lowerToEncoding 6
+instance FromJSON Member where
+    parseJSON = lowerFromJSON 6
 
 data Guild = Guild { guildUnavailable :: Bool
                    , guildId :: Text
@@ -154,9 +169,9 @@ data Ready = Ready { readyV :: Int
                    , readyUser :: User
                    , readyShard :: [Int]
                    , readySession_id :: Text
-                   , readyRelationships :: [Text] -- TODO
-                   , readyPrivate_channels :: [Text] -- TODO
-                   , readyPresences :: [Text] -- TODO
+                   , readyRelationships :: Value
+                   , readyPrivate_channels :: Value
+                   , readyPresences :: Value
                    , readyHeartbeat_interval :: Int
                    , readyGuilds :: [Guild]
                    , ready_trace :: [Text]
@@ -168,25 +183,25 @@ instance ToJSON Ready where
 instance FromJSON Ready where
     parseJSON = lowerFromJSON 5
 
-data GuildCreate = GuildCreate { guildcVoice_states :: [Text] -- TODO
+data GuildCreate = GuildCreate { guildcVoice_states :: Value
                                , guildcVerification_level :: Int
                                , guildcUnavailable :: Bool
-                               , guildcRoles :: [Text] -- TODO
+                               , guildcRoles :: Value
                                , guildcRegion :: Text
-                               , guildcPresences :: [Text] -- TODO
+                               , guildcPresences :: Value
                                , guildcOwner_id :: Text
                                , guildcName :: Text
                                , guildcMfa_level :: Int
-                               , guildcMembers :: [Text] -- TODO
+                               , guildcMembers :: [Member]
                                , guildcMember_count :: Int
                                , guildcLarge :: Bool
                                , guildcJoined_at :: Text
                                , guildcId :: Text
                                , guildcIcon :: Text
-                               , guildcFeatures :: [Text] -- TODO
-                               , guildcEmojis :: [Text] -- TODO
+                               , guildcFeatures :: Value
+                               , guildcEmojis :: Value
                                , guildcDefault_message_notifications :: Int
-                               , guildcChannels :: [Text] -- TODO
+                               , guildcChannels :: Value
                                , guildcAFK_timeout :: Int
                                , guildcAFK_channel_id :: Maybe Text
                                }
@@ -198,7 +213,7 @@ instance FromJSON GuildCreate where
     parseJSON = lowerFromJSON 6
 
 data TypingStart = TypingStart { typingsUser_id :: Text
-                               , typingsTimestamp :: Text
+                               , typingsTimestamp :: Double
                                , typingsChannel_id :: Text
                                }
                                deriving (Generic, Show)
@@ -207,6 +222,20 @@ instance ToJSON TypingStart where
     toEncoding = lowerToEncoding 7
 instance FromJSON TypingStart where
     parseJSON = lowerFromJSON 7
+
+data PresenceUpdate = PresenceUpdate { presUser :: Map Text Text
+                                     , presStatus :: Text
+                                     , presRoles :: [Text]
+                                     , presNick :: Text
+                                     , presGuild_id :: Text
+                                     , presGame :: Text
+                                     }
+                                     deriving (Generic, Show)
+
+instance ToJSON PresenceUpdate where
+    toEncoding = lowerToEncoding 4
+instance FromJSON PresenceUpdate where
+    parseJSON = lowerFromJSON 4
 
 
 -- }}}
@@ -239,11 +268,13 @@ props = M.fromList [ ("$os", "linux")
                    ]
 
 
-stateSeq = unsafePerformIO $ newIORef 0
+stateSeq = unsafePerformIO $ newTMVarIO 0
 
 stateConfigt = unsafePerformIO $ newEmptyTMVarIO
 
 recvTChan = unsafePerformIO $ newTChanIO
+
+stateUsers = unsafePerformIO $ newTMVarIO []
 
 
 trySome :: IO a -> IO $ Either SomeException a
@@ -264,26 +295,43 @@ identify obj = sendJSON $ Dispatch 2 obj Nothing Nothing
 
 onReady :: Connection -> Dispatch Ready -> IO ()
 onReady conn dsptch@(Dispatch op d s t) = do
-    print dsptch
+    print $ dsptch { dispatchD = () }
     tid <- forkIO $ forever $ do
-        let ms = readyHeartbeat_interval d * 900
-        print ms
+        let ms = readyHeartbeat_interval d * 1000
+        putStr $ show ms
         threadDelay ms
-        seq <- readIORef stateSeq
+        seq <- atomically $ readTMVar stateSeq
         let obj = Dispatch 1 seq Nothing Nothing
         sendJSON obj conn
     print tid
 
 onGuildCreate :: Connection -> Dispatch GuildCreate -> IO ()
-onGuildCreate conn dsptch = do
-    print dsptch
+onGuildCreate conn dsptch@(Dispatch op d s t) = do
+    print $ dsptch { dispatchD = () }
+    let members = guildcMembers d
+        users = M.unions $ flip map members $ \mem ->
+            let !user = memberUser mem
+                !nick = CI.mk $ userUsername user
+            in M.singleton nick $
+                   Tombot.User { Tombot.userNick = nick
+                               , Tombot.userName = userUsername user
+                               , Tombot.userId = userId user
+                               , Tombot.userAvatar = userAvatar user
+                               , Tombot.userHost = ""
+                               , Tombot.userStat = Tombot.Online
+                               , Tombot.userChans = mempty
+                               }
+    atomically $ swapTMVar stateUsers users
+    print $ flip map members $ userUsername . memberUser
 
 onMessage :: Connection -> Dispatch MessageCreate -> IO ()
 onMessage conn dsptch@(Dispatch op d s t) = do
-    print dsptch
-    atomicWriteIORef stateSeq $ maybe 0 id s
+    print $ messagecAuthor d
+    print $ messagecContent d
+    atomically $ swapTMVar stateSeq $ maybe 0 id s
     atomically $ writeTChan recvTChan $ messagecContent d
 
+    users <- atomically $ readTMVar stateUsers
     configt <- atomically $ readTMVar stateConfigt
     tid <- myThreadId
     let chan = fromString $ messagecChannel_id d
@@ -297,7 +345,9 @@ onMessage conn dsptch@(Dispatch op d s t) = do
                                   }
         chans = [ (chan, stChan) ]
         nick = maybe "idiot" id . M.lookup "username" $ messagecAuthor d
-        user = Tombot.User (CI.mk nick) "" "" "" "" Tombot.Online (M.singleton chan "")
+        user = Tombot.User (CI.mk nick) "" "" Nothing "" Tombot.Online (M.singleton chan "")
+        users' = flip M.map users $ \user ->
+                user { Tombot.userChans = M.singleton chan "" }
         server = Tombot.StServer { Tombot.stServHost = "discordapp.com"
                                  , Tombot.stServPort = 443
                                  , Tombot.stServChans = chans
@@ -305,7 +355,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
                                  , Tombot.stServBotName = ""
                                  , Tombot.stServNickServId = Nothing
                                  , Tombot.stServStat = Tombot.Connected
-                                 , Tombot.stServUsers = []
+                                 , Tombot.stServUsers = users'
                                  , Tombot.stServThreads = []
                                  }
         current = Tombot.Current { Tombot.currUser = user
@@ -330,24 +380,51 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         let msgObj = M.singleton "content" msg :: Map Text Text
         liftIO $ sendHTTP (messageURL $ T.unpack chan) (encode msgObj)
 
-websockLoop conn = do
-    identify (Identify (fromString botToken) props False 50 [0, 1]) conn
-    forever $ do
-        emsg <- trySome $ receiveData conn
+onPresUpdate :: Connection -> Dispatch PresenceUpdate -> IO ()
+onPresUpdate conn dsptch = do
+    print dsptch
 
-        flip (either onClose) emsg $ \msg -> do
-            BL.putStrLn msg
-            let ready = decode msg :: Maybe $ Dispatch Ready
-            let guildCreate = decode msg :: Maybe $ Dispatch GuildCreate
-            let message = decode msg :: Maybe $ Dispatch MessageCreate
-            maybe (return ()) (onMessage conn) message
-            maybe (return ()) (onReady conn) ready
-            maybe (return ()) (onGuildCreate conn) guildCreate
+onTypingStart :: Connection -> Dispatch TypingStart -> IO ()
+onTypingStart conn dsptch = do
+    print dsptch
+
+websockIdentify conn = do
+    identify (Identify (fromString botToken) props False 50 [0, 1]) conn
+
+    websockLoop conn
+
+websockLoop conn = do
+    emsg <- trySome $ receive conn
+
+    flip (either onClose) emsg $ \msg -> do
+        mdm <- case msg of
+            DataMessage dm -> case dm of
+                Text t -> return . Just $ fromLazyByteString t
+                Binary b -> return . Just $ fromLazyByteString b
+            -- TODO
+            ControlMessage cm -> print cm >> return Nothing
+
+        -- TODO SHORTCIRCUITING NOW
+        let ready = join $ decode <$> mdm
+        let guildCreate = join $ decode <$> mdm
+        let message = join $ decode <$> mdm
+        let presUpdate = join $ decode <$> mdm
+        let typingStart = join $ decode <$> mdm
+        maybe (return ()) (onMessage conn) message
+        maybe (return ()) (onReady conn) ready
+        maybe (return ()) (onGuildCreate conn) guildCreate
+        maybe (return ()) (onPresUpdate conn) presUpdate
+        maybe (return ()) (onTypingStart conn) typingStart
+
+        -- Preview all
+        maybe (return ()) (print . BL.take 50) mdm
+
+        websockLoop conn
 
 onClose e = print e >> websockInit
 
 websockInit = do
-    runSecureClient wsURL 443 "/" websockLoop
+    runSecureClient wsURL 443 "/" websockIdentify
 
 
 runDiscord configt = do
