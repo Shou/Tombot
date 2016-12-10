@@ -2,14 +2,7 @@ flags: {}
 extra-package-dbs: []
 packages:
 - '.'
-- location:
-    git: git@github.com:Shou/boolean-like.git
-    commit: 4715d2e1ab7f2f4c0cd8773c113d495c72cee06a
-- location:
-    git: git@github.com:Shou/type-operators.git
-    commit: e52f9ebe8601a30b1e380d71e637538e457387ae
 extra-deps:
-- hashmap-1.3.1.1
-- text-1.2.2.1
-- boolean-like-0.1.0.0
-resolver: lts-6.3
+- boolean-like-0.1.1.0
+- type-operators-0.1.0.4
+resolver: lts-7.9

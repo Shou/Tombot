@@ -3,12 +3,13 @@
 -- See the file "LICENSE" for more information.
 -- Copyright Shou, 2013
 
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, RankNTypes #-}
 
 module Tombot.Bot where
 
 -- {{{ Imports
-import Tombot.Net
+import Tombot.IRC.Net
+import qualified Tombot.IRC.Types as IRC
 import Tombot.IRC
 import Tombot.Parser
 import Tombot.Utils
@@ -18,66 +19,63 @@ import Control.Applicative
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Error
-import Control.Monad.State
-import Control.Monad.Trans.Either (EitherT(..))
+import Control.Monad.Reader
+import Control.Monad.Except
 
 import Data.Attoparsec.Text (Parser)
-import qualified Data.Attoparsec.Text as A
+import qualified Data.Attoparsec.Text as Atto
+import qualified Data.CaseInsensitive as CI
+import Data.Default
 import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
+import qualified Data.Map.Strict as Map
 import Data.Monoid ((<>))
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
+import qualified Data.Text as Text
+import qualified Data.Text.IO as Text
 
 import System.Timeout (timeout)
 -- }}}
 
 -- | Initialise a Mind state.
-initialise :: TMVar StConfig -> Server -> IO ()
+initialise :: TVar Config -> Server IRC.IRC -> IO ()
 initialise configt server = do
-    let host = servHost server
-        port = fromIntegral $ servPort server
-        nick = T.pack $ servBotNicks server !! 0
-        name = T.pack $ servBotName server
+    config <- atomically $ readTVar configt
+
+    let host = Text.unpack $ _servHost server
+        port = fromIntegral $ _servPort server
+        -- TODO FIXME XXX
+        nick = "Tombot"
+        name = "Tombot"
+
     h <- connecter host port nick name
+
     tid <- myThreadId
-    let stServer = toStServ server
-        current = Current { currUser = defUser
-                          , currMode = ""
-                          , currServ = stServer
-                          , currDest = Left defUser
-                          , currConfigTMVar = configt
-                          , currHandle = h
-                          , currThreadId = tid
+
+    let current = Current { _currUser = def
+                          , _currServer = server
+                          , _currDestination = Left def
+                          , _currConfig = config
                           }
-    currt <- newTMVarIO current
-    atomically $ flip mapTMVar configt $ \c ->
-        c { stConfServs = let servs = stConfServs c
-                          in M.insert host currt servs
-          }
-    void $ runStateT listen currt
+
+    currt <- newTVarIO current
+    void $ runReaderT listen currt
 
 -- TODO fix TMVar lock
 -- | Read the IRC handle.
-listen :: Mind ()
+listen :: Mind IRC.IRC ()
 listen = forever $ do
-    st <- get
-    mh <- liftIO $ timeout (10^6) $ fst <$> runStateT (currHandle <$> see) st
-    unless (isJust mh) $ erro "There's a TMVar lock somewhere."
-    let h = (\(Just h) -> h) mh
-    let tryGetLine :: Mind (Maybe Text)
+    let tryGetLine :: Mind IRC.IRC (Maybe Text)
         tryGetLine = liftIO $ do
-            fmap join $ timeout (240*10^6) $ fmap hush $ try $ T.hGetLine h
+            fmap join $ timeout (240*10^6) $ fmap hush $ try $ undefined
     mline <- tryGetLine
     maybe reconnect respond mline
 
 -- | please
-respond :: Text -> Mind ()
+respond :: Text -> Mind IRC.IRC ()
 respond line = do
-    server <- sees currServ
-    let eirc = note line $ A.maybeResult $ A.parse ircparser line `A.feed` ""
-    flip (either warn) eirc $ \irc -> void . runEitherT $ do
+    server <- sees _currServer
+    let eirc = note line $ Atto.maybeResult $ Atto.parse ircparser line `Atto.feed` ""
+    flip (either warn) eirc $ \irc -> void . runExceptT $ do
         liftIO $ print irc
         onNick irc $ \_ -> do
             nickUserlist irc
@@ -92,9 +90,9 @@ respond line = do
             remind irc
         onPart irc $ \_ -> do
             adaptPart irc
-        onTopic irc $ \(Topic nick name host c t) -> do
-            void $ modChanTopic c $ const t
-        onPing irc $ \(Ping t) -> write $ "PONG :" <> t
+        onTopic irc $ \(IRC.Topic nick name host c t) -> do
+            void $ modChanTopic (CI.mk c) $ const t
+        onPing irc $ \(IRC.Ping t) -> write "IRC" $ "PONG :" <> t
         onPrivmsg irc $ \_ -> do
             adaptPriv irc
             ctcpVersion irc

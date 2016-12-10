@@ -3,15 +3,17 @@
 -- See the file "LICENSE" for more information.
 -- Copyright Shou, 2013
 
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, TypeApplications, TypeOperators #-}
 
 module Main where
 
 
 -- {{{ Imports
-import Config
+import Tombot.IRC.Types (IRC)
+import Tombot.Config
 import Tombot.Bot
 import Tombot.Discord
+import qualified Tombot.Errors as Errors
 import Tombot.IRC
 import Tombot.Types
 import Tombot.Utils
@@ -19,13 +21,19 @@ import Tombot.Utils
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad.State
+import Control.Monad.Except
+import Control.Type.Operator
 
-import qualified Data.Map as M
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
+import qualified Data.Map as Map
+import qualified Data.Text as Text
+import qualified Data.Text.IO as Text
+
+import Options.Applicative
 
 import System.IO
 -- }}}
+
+-- {{{ NOTES
 
 -- XXX
 -- - Use Aeson for configuration files
@@ -148,40 +156,57 @@ import System.IO
 -- - Privilege system
 --      - Review the functions
 
+-- }}}
+
+
+-- | Bot verbosity command-line argument parser
+verbosity :: Parser Int
+verbosity = option auto
+          $ long "verbosity"
+          <> short 'v'
+          <> metavar "N"
+          <> help "Bot verbosity level. 0 - 2."
+          <> value 1
+          <> showDefault
+
+service :: Parser Text.Text
+service = option auto
+        $ long "service" <> short 's'
+        <> metavar "String"
+        <> help "Specify services to connect to."
+        <> value "Discord"
+        <> showDefault
+        <> completeWith [] -- TODO use planned services list
+
+fullArgs :: Parser Args
+fullArgs = Args <$> verbosity <*> service
+
+parserOpts :: ParserInfo Args
+parserOpts = info (helper <*> fullArgs)
+           $ fullDesc <> progDesc "Let her loose on your chats"
+                      <> header "Tombot the crazy chatbot"
+
 
 main2 = do
     -- TODO
-    config <- return $ Config {}
-    servs <- atomically $ readTMVar tmservers
-    forM_ servs $ forkIO . ($ config)
+    config <- loadConfig
+    servs <- atomically $ readTMVar undefined
+    args <- execParser parserOpts
+    forM_ @[] servs $ forkIO . ($ config)
 
 main :: IO ()
-main = do
-    configt <- newTMVarIO $ toStConf config
-    initDB >> loadDB
-    forM_ servers $ \server -> forkIO $ initialise configt server
-    forkIO $ runDiscord configt
-    userInput configt
+main = (=<<) (either print return) $ runExceptT $ do
+    mayConfig <- liftIO loadConfig
+    config <- case mayConfig of Nothing -> throwError Errors.noConfig
+                                Just config -> return config
+    configt <- liftIO $ newTVarIO config
+    liftIO $ initDB >> loadDB
+    -- XXX IRC; disabled temporarily
+    --forM_ servers $ \server -> forkIO $ initialise configt server
+    liftIO . forkIO $ runDiscord configt
+    liftIO userInput
 
 -- | Direct input
-userInput :: TMVar StConfig -> IO ()
-userInput ct = loop $ do
-    line <- liftIO T.getLine
-    let (server, rest) = bisect (== ' ') line
-        (chan, mesg) = bisect (== ' ') rest
-    servs <- fmap stConfServs . liftIO . atomically $ readTMVar ct
-    let mserv = M.lookup (T.unpack server) servs
-    when (mserv /= Nothing) $ put mserv
-    let message = maybe rest (const mesg) mserv
-        channel = maybe server (const chan) mserv
-    ms <- get
-    flip (maybe $ return ()) ms $ \st -> void . liftIO . flip runStateT st $ do
-        let irc = Privmsg "Tombot" "" "" channel message
-        adaptPriv irc
-        let user = User "Tombot" "Tombot" "" Nothing "botnet.fbi.gov" BotOwner M.empty
-        sets $ \c -> c { currUser = user }
-        runLang putPrivmsg irc
-  where
-    loop :: StateT (Maybe (TMVar Current)) IO () -> IO ()
-    loop m = void . flip runStateT Nothing $ forever m
+userInput :: IO ()
+userInput = forever getLine
 

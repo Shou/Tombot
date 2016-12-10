@@ -5,37 +5,42 @@
 
 {-# LANGUAGE StandaloneDeriving, ScopedTypeVariables,
              TypeSynonymInstances, FlexibleInstances,
-             DeriveGeneric, FlexibleContexts,
-             TemplateHaskell #-}
+             DeriveGeneric, FlexibleContexts, TypeFamilies,
+             TemplateHaskell, OverloadedStrings, TypeApplications,
+             AllowAmbiguousTypes, EmptyDataDecls, TypeOperators,
+             RankNTypes, FunctionalDependencies #-}
 
 module Tombot.Types where
 
 -- {{{ Imports
 
-import Control.BoolLike ( Falsifier(..), Andlike(..), Orlike(..)
-                        , Xorlike(..)
-                        )
 import Control.Concurrent (ThreadId)
 import Control.Concurrent.STM
 import Control.Lens (makeLenses)
+import Control.Monad.Reader
 import Control.Monad.State
-import Control.Monad.Trans.Either (EitherT)
+import Control.Monad.Except
+import Control.Type.Operator
+
+import Combinator.Booly ( Falsifier(..), Andlike(..), Orlike(..)
+                        , Xorlike(..)
+                        )
 
 import Data.Aeson
 import Data.Aeson.Types
+import Data.Bifunctor
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Char (toLower)
 import Data.Default
 import Data.Map.Strict (Map)
+import Data.Monoid
+import Data.Set (Set)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (POSIXTime)
-import Data.Typeable (Typeable)
-import Data.Typeable.Internal
 import Data.Vector (Vector)
-import qualified Data.Vector as V
 
-import qualified Database.SQLite.Simple.ToField as Q
+import qualified Database.SQLite.Simple.ToField as SQL
 
 import GHC.Generics
 
@@ -45,12 +50,8 @@ import System.IO (Handle)
 
 -- }}}
 
--- TODO
-
--- XXX
-
-
 -- {{{ Helper functions
+
 lowerFromJSON n = genericParseJSON opts
   where
     opts = defaultOptions { fieldLabelModifier = map toLower . drop n }
@@ -62,26 +63,48 @@ lowerToJSON n = genericToJSON opts
 lowerToEncoding n = genericToEncoding opts
   where
     opts = defaultOptions { fieldLabelModifier = map toLower . drop n }
+
 -- }}}
 
 
-instance Orlike (Vector a) where
-    (<|<) va vb | V.null va = vb
-                | otherwise = va
+-- Services
+
+data Discord
+data Discourse
 
 
-data Allowed a = Blacklist !a
-               | Whitelist !a
-               deriving (Read, Show, Generic)
+type family ServerService s
+type family ChannelService s
+type family UserService s
+type family BotService s
+
+
+type instance ServerService () = ()
+type instance ChannelService () = ()
+type instance UserService () = ()
+type instance BotService () = ()
+
+
+instance FromJSON (CI Text) where
+    parseJSON = fmap CI.mk . parseJSON
+
+
+data Args = Args { argsVerbosity :: Int
+                 , argsService :: Text
+                 }
+
+
+data Biallowed a b = Blacklist !a
+                   | Whitelist !b
+                   deriving (Read, Show, Generic)
+
+type Allowed a = Biallowed a a
 
 instance FromJSON a => FromJSON (Allowed a)
 
-instance Functor Allowed where
-    fmap f (Blacklist a) = Blacklist $ f a
-    fmap f (Whitelist a) = Whitelist $ f a
-
-instance Show (TMVar a) where
-    show x = "TMVar _"
+instance Bifunctor Biallowed where
+    bimap f _ (Blacklist a) = Blacklist $ f a
+    bimap _ f (Whitelist a) = Whitelist $ f a
 
 data UserStatus = Offline
                 | Banned
@@ -89,49 +112,50 @@ data UserStatus = Offline
                 | Mod
                 | Admin
                 | BotOwner
-                deriving (Eq, Ord, Read, Show)
+                deriving (Eq, Ord, Show, Read)
 
 type Mode = [Char]
 
 type Nick = CI Text
 
 -- TODO last activity/online
-data User = User { _userNick :: !Nick
-                 , _userName :: !Text
-                 , _userId :: !Text
-                 , _userAvatar :: Maybe Text
-                 , _userHost :: !Text
-                 , _userStat :: !UserStatus
-                 , _userChans :: Map Text Mode
+data User s = User { _userNick :: !Text
+                   -- ^ Nickname
+                   , _userName :: !Text
+                   -- ^ Full name
+                   , _userId :: CI Text
+                   -- ^ Account ID
+                   , _userChannels :: Set (CI Text)
+                   -- ^ Channel names
+                   , _userStatus :: !UserStatus
+                   -- ^ Online status
+                   , _userService :: UserService s
+                   -- ^ Service data
+                   }
+
+instance Default (User ()) where
+    def = User "" "" "" mempty Offline ()
+
+data Bot s = Bot { _botNick :: Text
+                 , _botName :: Text
+                 , _botId :: Text
+                 , _botService :: BotService s
                  }
-                 deriving (Show)
 
-makeLenses ''User
-
-data Bot = Bot { _botNick :: Text
-               , _botName :: Text
-               , _botId :: Text
-               }
-               deriving (Show)
-
-makeLenses ''Bot
 
 -- XXX what else should a `Channel' hold?
 -- NOTE rejoin on kick with `chanJoin = True`; don't join at all if `False`.
-data Channel = Channel { _chanName :: !Text
-                       , _chanJoin :: !Bool
-                       , _chanAutoJoin :: !Bool
-                       , _chanTopic :: !Text
-                       , _chanPrefix :: ![Char]
-                       , _chanFuncs :: Allowed [Text]
-                       } deriving (Show, Generic)
+data Channel s = Channel { _chanName :: CI Text
+                         , _chanJoin :: !Bool
+                         , _chanAutoJoin :: !Bool
+                         , _chanTopic :: !Text
+                         , _chanPrefix :: ![Char]
+                         , _chanFuncs :: Map Text $ Funk s
+                         , _chanService :: ChannelService s
+                         }
 
-makeLenses ''Channel
-
-instance Default Channel where
-    def = Channel mempty False False mempty [':'] (Whitelist [])
-
-instance FromJSON Channel
+instance Default (Channel ()) where
+    def = Channel "" False False "" [':'] mempty ()
 
 -- TODO move this to Utils
 fromAllowed :: Allowed a -> a
@@ -158,23 +182,14 @@ data ServerStatus = Connected
 -- XXX we can generate a random string and append it to the nick, then if there
 --     is a NickServId we will attempt to ghost. Basically generate a random
 --     string every time the current nick is in use.
-data Server = Server { _servHost :: !String
-                     , _servPort :: !Int
-                     , _servChans :: ![Channel]
-                     , _servStatus :: ServerStatus
-                     , _servUsers :: Map Text User
-                     } deriving (Show)
-
-makeLenses ''Server
-
--- XXX should we split currConfigTMVar up?
-data Current = Current { _currUser :: !User
-                       , _currMode :: !Text
-                       , _currServ :: !Server
-                       , _currDest :: Either User Channel
+data Server s = Server { _servHost :: !Text
+                       , _servPort :: !Integer
+                       , _servChannels :: Map (CI Text) (Channel s)
+                       , _servStatus :: ServerStatus
+                       , _servUsers :: Map (CI Text) (Users s)
+                       , _servBot :: Bot s
+                       , _servService :: ServerService s
                        }
-
-makeLenses ''Current
 
 data Config = Config { _confVerbosity :: !Int
                      -- ^ Verbosity level.
@@ -186,136 +201,86 @@ data Config = Config { _confVerbosity :: !Int
                      , _confLogPath :: !FilePath
                      , _confFile :: !FilePath
                      }
+                     deriving (Show, Generic)
 
-makeLenses ''Config
 
 instance Default Config where
     def = Config 1 "" True "logs/" "Config.json"
+
+instance FromJSON Config where
+  parseJSON (Object v) =
+    Config <$> v .: "verbosity"
+           <*> v .: "directory"
+           <*> v .: "logging"
+           <*> v .: "logpath"
+           <*> v .: "file"
+
+instance ToJSON Config where
+  toEncoding (Config v d l lp f) =
+    pairs $ "verbosity" .= v <> "directory" .= d
+                             <> "logging" .= l
+                             <> "logpath" .= lp
+                             <> "file" .= f
+
+data Current s = Current { _currUser :: User s
+                         , _currServer :: Server s
+                         , _currDestination :: Either (User s) (Channel s)
+                         , _currConfig :: !Config
+                         }
+
 
 data StFunk = StFunk { stFunkRecs :: !Int
                      , stFunkMax :: !Int
                      }
 
-data Funk = Funk { funkName :: !Text
-                 , funkFunc :: !Func
-                 , funkStat :: !UserStatus
-                 }
+data Funk s = Funk { funkName :: !Text
+                   , funkFunc :: Text -> Mind s Text
+                   , funkStat :: !UserStatus
+                   }
+
+instance Show (Funk s) where
+    show (Funk n _ s) = "Funk " <> show n <> " " <> show s
 
 
-type Mind = StateT (TMVar Current) IO
-type Decide e = EitherT e Mind
-type Funky = StateT StFunk Mind
-
-type Funcs = Map Text Funk
--- FIXME move this to the botfuncs source file; don't make it hard to find.
-type Func = Text -> Mind Text
+type Mind s = ReaderT (TVar (Current s)) IO
+type Decide s e = ExceptT e $ Mind s
+type Funky s = StateT StFunk (Mind s)
 
 type Modes = Map Text Mode
-type Users = Map Nick User
+type Users s = Map (CI Text) (User s)
 
-instance Q.ToField Nick where
-    toField = Q.toField . CI.original
+instance SQL.ToField Nick where
+    toField = SQL.toField . CI.original
 
--- XXX User data?
---     wat
--- {{{ IRC
-data IRC = Nick { nickNick :: !Nick
-                , nickName :: !Text
-                , nickHost :: !Text
-                , nickText :: !Text
-                }
-         | Mode { modeNick :: !Nick
-                , modeName :: !Text
-                , modeHost :: !Text
-                , modeChan :: !Text
-                , modeChars :: ![Char]
-                , modeText :: Maybe Text
-                }
-         | Quit { quitNick :: !Nick
-                , quitName :: !Text
-                , quitHost :: !Text
-                , quitText :: !Text
-                }
-         | Join { joinNick :: !Nick
-                , joinName :: !Text
-                , joinHost :: !Text
-                , joinChan :: !Text
-                }
-         | Part { partNick :: !Nick
-                , partName :: !Text
-                , partHost :: !Text
-                , partChan :: !Text
-                , partText :: !Text
-                }
-         | Topic { topicNick :: !Nick
-                 , topicName :: !Text
-                 , topicHost :: !Text
-                 , topicChan :: !Text
-                 , topicText :: !Text
-                 }
-         | Invite { invNick :: !Nick
-                  , invName :: !Text
-                  , invHost :: !Text
-                  , invDest :: !Text
-                  , invChan :: !Text
-                  }
-         | Kick { kickNick :: !Nick
-                , kickName :: !Text
-                , kickHost :: !Text
-                , kickChans :: !Text
-                , kickNicks :: !Text
-                , kickText :: !Text
-                }
-         | Privmsg { privNick :: !Nick
-                   , privName :: !Text
-                   , privHost :: !Text
-                   , privDest :: !Text
-                   , privText :: !Text
-                   }
-         | Notice { noticeNick :: !Nick
-                  , noticeName :: !Text
-                  , noticeHost :: !Text
-                  , noticeDest :: !Text
-                  , noticeText :: !Text
-                  }
-         | Kill { killNick :: !Nick
-                , killText :: !Text
-                }
-         | Ping { pingServer :: !Text }
-         | Error { errorText :: !Text }
-         | Numeric { numNumber :: !Text
-                   , numArgs :: Maybe Text
-                   , numText :: !Text
-                   }
-         | Cap { capSub :: !Text
-               , capText :: !Text
-               }
-         deriving (Show)
 
--- }}}
+makeLenses ''User
+makeLenses ''Bot
+makeLenses ''Channel
+makeLenses ''Server
+makeLenses ''Config
+makeLenses ''Current
+
 
 -- {{{ Hub
 
-data Event = EventMessage { emsgUser :: !User
-                          , emsgDest :: !Text
-                          , emsgTime :: !POSIXTime
-                          , emsgId :: !Text
-                          , emsgText :: !Text
+data Event s = EventMessage { eMessageUser :: User s
+                            , eMessageDest :: !Text
+                            , eMessageTime :: !POSIXTime
+                            , eMessageId :: !Text
+                            , eMessageText :: !Text
+                            }
+
+             | EventServer { eServerName :: !Text
+                           , eServerId :: !Text
+                           , eServerChans :: ![Text]
+                           }
+
+             | EventStatus { eStatusUser :: User s
+                           , eStatusStatus :: !UserStatus
+                           }
+
+             | EventTopic { eTopicText :: !Text
                           }
-
-           | EventServer { esrvName :: !Text
-                         , esrvId :: !Text
-                         , esrvChans :: ![Text]
-                         }
-
-           | EventStatus { estsUser :: !User
-                         }
-
-           | EventLeave { elveUser :: !User
-                        }
-
-           | EventTopic { etpcText :: !Text
-                        }
 
 -- }}}
 

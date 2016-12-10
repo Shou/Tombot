@@ -3,9 +3,9 @@
 -- See the file "LICENSE" for more information.
 -- Copyright Shou, 2013
 
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DoAndIfThenElse #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings, DoAndIfThenElse, TupleSections,
+             ScopedTypeVariables
+#-}
 
 module Tombot.Parser (
   botparse
@@ -17,28 +17,28 @@ module Tombot.Parser (
 
 -- {{{ Imports
 import Tombot.Types
+import Tombot.IRC.Types
 import Tombot.Utils
 
 import Control.Applicative
 import Control.Error
 import Control.Monad
-import Control.Monad.Trans
 import Control.Monad.State
-import Control.Monad.Trans.Either (left)
+import Control.Monad.Except
 
 import Data.Attoparsec.Text (Parser)
-import qualified Data.Attoparsec.Text as A
+import qualified Data.Attoparsec.Text as Atto
 import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.List
 import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
+import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Monoid
 import Data.Ord
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
+import qualified Data.Text as Text
+import qualified Data.Text.IO as Text
 
 import Debug.Trace
 
@@ -99,6 +99,13 @@ khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
 
 -- XXX
 
+-- {{{ New hot parser
+
+data Operator = Operator Text Bool Int
+-- ^ Operator name, fixity, and precedence
+
+-- }}}
+
 -- {{{ Bot
 
 botparser :: [Char] -> [Text] -> Parser KawaiiLang
@@ -107,7 +114,7 @@ botparser ps fs = skipPrefix ps >> limbs fs
 -- | Match against parts of a KawaiiLang command, where Funcs, Opers and Parens
 -- make up the parts.
 limbs :: [Text] -> Parser KawaiiLang
-limbs fs = foldr mappend Kempty <$> A.manyTill anyLimb (A.try A.endOfInput)
+limbs fs = foldr mappend Kempty <$> Atto.manyTill anyLimb (Atto.try Atto.endOfInput)
   where
     anyLimb = do
         trySpaced (fullCmd fs)
@@ -120,72 +127,72 @@ limbs fs = foldr mappend Kempty <$> A.manyTill anyLimb (A.try A.endOfInput)
 -- of the input on the last space skipper.
 trySpaced :: Parser a -> Parser a
 trySpaced f = do
-    A.try A.skipSpace
+    Atto.try Atto.skipSpace
     v <- f
-    A.try A.skipSpace
+    Atto.try Atto.skipSpace
     return v
 
 -- | Match against any of the strings in `cmds'.
 cmd :: [Text] -> Parser Text
-cmd cmds = A.choice (zipWith (flip ($)) scmds $ cycle [fcmd])
+cmd cmds = Atto.choice (zipWith (flip ($)) scmds $ cycle [fcmd])
   where
     -- sort by length so longer function names are prioritised
-    scmds = sortBy (comparing $ (* (-1)) . T.length) cmds
+    scmds = sortBy (comparing $ (* (-1)) . Text.length) cmds
     fcmd x = do
-        c <- A.asciiCI x
-        if T.all isLetter c then A.skipSpace else A.try A.skipSpace
-        return $ T.toLower c
+        c <- Atto.asciiCI x
+        if Text.all isLetter c then Atto.skipSpace else Atto.try Atto.skipSpace
+        return $ Text.toLower c
 
 skipPrefix :: [Char] -> Parser ()
-skipPrefix cs = A.skip (`elem` cs)
+skipPrefix cs = Atto.skip (`elem` cs)
 
 oper :: Parser KawaiiLang
-oper = Oper <$> A.choice strs <*> pure Kempty
+oper = Oper <$> Atto.choice strs <*> pure Kempty
   where
-    strs = [ A.string "++"
-           , A.string "->"
-           , A.string "<-"
-           , A.string "<>"
-           , A.string "><"
-           , A.string ">>"
-           , A.string "+>"
-           , A.string "=="
-           , A.string "/="
-           , A.string "=>"
-           , A.string "/>"
+    strs = [ Atto.string "++"
+           , Atto.string "->"
+           , Atto.string "<-"
+           , Atto.string "<>"
+           , Atto.string "><"
+           , Atto.string ">>"
+           , Atto.string "+>"
+           , Atto.string "=="
+           , Atto.string "/="
+           , Atto.string "=>"
+           , Atto.string "/>"
            ]
 
 inParens :: [Text] -> Parser KawaiiLang
 inParens fs = do
-    (cs, op) <- "(" *> manyTillKeep A.anyChar end
-    let cs' = T.pack cs
-        kls = A.parse (limbs fs) cs'
+    (cs, op) <- "(" *> manyTillKeep Atto.anyChar end
+    let cs' = Text.pack cs
+        kls = Atto.parse (limbs fs) cs'
     return $ Parens (resultToKL kls) (either (const Kempty) id op)
   where
-    end = A.try $ A.string ")" >> ignoreSpaces >> (padOper <|> kawaiiEndOfInput)
-    kawaiiEndOfInput = Left <$> A.endOfInput
+    end = Atto.try $ Atto.string ")" >> ignoreSpaces >> (padOper <|> kawaiiEndOfInput)
+    kawaiiEndOfInput = Left <$> Atto.endOfInput
     padOper = Right <$> oper
-    resultToKL :: A.IResult Text KawaiiLang -> KawaiiLang
+    resultToKL :: Atto.IResult Text KawaiiLang -> KawaiiLang
     resultToKL x = case x of
-        A.Partial f -> resultToKL $ f ""
-        A.Fail _ _ _ -> Kempty
-        A.Done _ r -> r
+        Atto.Partial f -> resultToKL $ f ""
+        Atto.Fail _ _ _ -> Kempty
+        Atto.Done _ r -> r
 
 args :: Parser (Text, KawaiiLang)
 args = do
-    (t, op) <- manyTillKeep A.anyChar $ A.try operOrEnd
-    return (T.pack t, either (const Kempty) id op)
+    (t, op) <- manyTillKeep Atto.anyChar $ Atto.try operOrEnd
+    return (Text.pack t, either (const Kempty) id op)
   where
-    operOrEnd = fmap Right oper <|> fmap Left A.endOfInput
+    operOrEnd = fmap Right oper <|> fmap Left Atto.endOfInput
 
-ignoreSpaces = A.skipWhile (== ' ')
+ignoreSpaces = Atto.skipWhile (== ' ')
 
 -- | Match against a full function such as `"> I am (very) hungry."`.
 fullCmd :: [Text] -> Parser KawaiiLang
 fullCmd fs = do
     c <- cmd fs
     (m, o) <- if c `elem` lefts
-              then (, Kempty) <$> A.takeText
+              then (, Kempty) <$> Atto.takeText
               else args
     return $ Func c m o
   where
@@ -194,31 +201,31 @@ fullCmd fs = do
 -- FIXME check Funk Stat
 -- TODO clean up and split this function
 -- | Compile `KawaiiLang' into `IO Text'.
-compile :: Map Text Funk -> KawaiiLang -> Mind Text
+compile :: forall s. Map Text (Funk s) -> KawaiiLang -> Mind s Text
 compile funcs = funky . klToText mempty
   where
-    klToText :: Text -> KawaiiLang -> Funky Text
+    klToText :: Text -> KawaiiLang -> Funky s Text
     -- Append
     klToText old (Oper "++" kl) = klToText old kl
     -- Pipe
     klToText old (Oper "->" kl) = klToText mempty $ kmap (<> old) kl
     -- Or
     klToText old (Oper "<>" kl) = do
-        if T.null $ T.strip old
+        if Text.null $ Text.strip old
         then klToText mempty kl
         else return old
     -- And right
     klToText old (Oper "><" kl) = do
-        if T.null $ T.strip old
+        if Text.null $ Text.strip old
         then return mempty
-        else klToText mempty kl >>= \t -> if T.null $ T.strip t
+        else klToText mempty kl >>= \t -> if Text.null $ Text.strip t
                                           then return mempty
                                           else return t
     -- And
     klToText old (Oper "+>" kl) = do
-        if T.null $ T.strip old
+        if Text.null $ Text.strip old
         then return mempty
-        else klToText mempty kl >>= \t -> if T.null $ T.strip t
+        else klToText mempty kl >>= \t -> if Text.null $ Text.strip t
                                           then return mempty
                                           else return $ old <> t
     -- Bind
@@ -250,7 +257,7 @@ compile funcs = funky . klToText mempty
             klToText old $ Func name (args <> t) Kempty
         -- Regular Func
         else do
-            flip (maybe $ return mempty) (M.lookup name funcs) $ \f -> do
+            flip (maybe $ return mempty) (Map.lookup name funcs) $ \f -> do
                 fu <- get
                 if stFunkRecs fu < stFunkMax fu then do
                     t <- lift $ mwhenPrivTrans (funkStat f) $ do
@@ -264,47 +271,47 @@ compile funcs = funky . klToText mempty
     klToText old Kempty = pure old
 
 -- |
-botparse :: Funcs -> Text -> Mind KawaiiLang
+botparse :: Map Text (Funk s) -> Text -> Mind s KawaiiLang
 botparse funcs t = fmap (either id id) . decide $ do
-    d <- either origNick stChanName . currDest <$> lift see
-    chans <- stServChans . currServ <$> lift see
-    let mchan = M.lookup d chans
-    unless (isJust mchan) $ lift (warn $ "No channel " <> d) >> left Kempty
+    d <- either _userId _chanName . _currDestination <$> lift see
+    chans <- _servChannels . _currServer <$> lift see
+    let mchan = Map.lookup d chans
+    unless (isJust mchan) $ lift (warn $ "No channel " <> d) >> throwError Kempty
     let chan = fromJust mchan
-        parser = botparser (stChanPrefix chan) (M.keys funcs)
-        mkl = A.maybeResult . flip A.feed "" $ A.parse parser t
+        parser = botparser (_chanPrefix chan) (Map.keys funcs)
+        mkl = Atto.maybeResult . flip Atto.feed "" $ Atto.parse parser t
     return $ maybe Kempty id mkl
 
 -- }}}
 
 -- {{{ IRC
-ircparser = A.choice [ nick, mode, quit, ircJoin, part, topic, invite, kick
+ircparser = Atto.choice [ nick, mode, quit, ircJoin, part, topic, invite, kick
                      , privmsg, notice, ping, ircError, numeric, cap
                      ]
 
 user = do
-    A.char ':'
-    nick <- CI.mk <$> A.takeWhile (/= '!')
-    A.char '!'
-    name <- A.takeWhile (/= '@')
-    A.char '@'
-    host <- A.takeWhile (/= ' ')
-    A.space
+    Atto.char ':'
+    nick <- Atto.takeWhile (/= '!')
+    Atto.char '!'
+    name <- Atto.takeWhile (/= '@')
+    Atto.char '@'
+    host <- Atto.takeWhile (/= ' ')
+    Atto.space
     return $ (nick, name, host)
 
 network = do
-    A.char ':'
-    server <- A.takeWhile (/= ' ')
-    A.space
-    return (CI.mk server, server, server)
+    Atto.char ':'
+    server <- Atto.takeWhile (/= ' ')
+    Atto.space
+    return (server, server, server)
 
 -- XXX test this
 nick = do
     (nick, name, host) <- user
-    A.string "NICK"
-    A.space
-    A.try $ A.char ':'
-    text <- A.takeText
+    Atto.string "NICK"
+    Atto.space
+    Atto.try $ Atto.char ':'
+    text <- Atto.takeText
     return $ Nick nick name host text
 
 -- XXX we can clearly see a pattern here. Use your head to minimise the code.
@@ -314,144 +321,144 @@ nick = do
 
 mode = do
     (nick, name, host) <- user <|> network
-    A.string "MODE"
-    A.space
-    chan <- A.takeWhile (/= ' ')
-    A.space
-    mode <- T.unpack <$> A.takeWhile (/= ' ')
-    A.space
-    text <- Just <$> A.takeText
+    Atto.string "MODE"
+    Atto.space
+    chan <- Atto.takeWhile (/= ' ')
+    Atto.space
+    mode <- Text.unpack <$> Atto.takeWhile (/= ' ')
+    Atto.space
+    text <- Just <$> Atto.takeText
     return $ Mode nick name host chan mode text
 
 -- XXX might be incorrect
 quit = do
     (nick, name, host) <- user
-    A.string "QUIT"
-    A.space
-    A.char ':'
-    text <- A.takeText
+    Atto.string "QUIT"
+    Atto.space
+    Atto.char ':'
+    text <- Atto.takeText
     return $ Quit nick name host text
 
 ircJoin = do
     (nick, name, host) <- user
-    A.string "JOIN"
-    A.space
-    A.char ':'
-    chan <- A.takeText
+    Atto.string "JOIN"
+    Atto.space
+    Atto.char ':'
+    chan <- Atto.takeText
     return $ Join nick name host chan
 
 part = do
     (nick, name, host) <- user
-    A.string "PART"
-    A.space
-    chan <- A.takeWhile (/= ' ')
-    A.try $ do
-        A.space
-        A.char ':'
-    text <- A.takeText
+    Atto.string "PART"
+    Atto.space
+    chan <- Atto.takeWhile (/= ' ')
+    Atto.try $ do
+        Atto.space
+        Atto.char ':'
+    text <- Atto.takeText
     return $ Part nick name host chan text
 
 topic = do
     (nick, name, host) <- user
-    A.string "TOPIC"
-    A.space
-    chan <- A.takeWhile (/= ' ')
-    A.space
-    A.char ':'
-    text <- A.takeText
+    Atto.string "TOPIC"
+    Atto.space
+    chan <- Atto.takeWhile (/= ' ')
+    Atto.space
+    Atto.char ':'
+    text <- Atto.takeText
     return $ Topic nick name host chan text
 
 invite = do
     (nick, name, host) <- user
-    A.string "INVITE"
-    A.space
-    rec <- A.takeWhile (/= ' ')
-    A.space
-    A.char ':'
-    chan <- A.takeText
+    Atto.string "INVITE"
+    Atto.space
+    rec <- Atto.takeWhile (/= ' ')
+    Atto.space
+    Atto.char ':'
+    chan <- Atto.takeText
     return $ Invite nick name host rec chan
 
 -- XXX might be incorrect
 kick = do
     (nick, name, host) <- user <|> network
-    A.string "KICK"
-    A.space
-    chans <- A.takeWhile (/= ' ')
-    A.space
-    nicks <- A.takeWhile (/= ' ')
-    A.space
-    A.char ':'
-    text <- A.takeText
+    Atto.string "KICK"
+    Atto.space
+    chans <- Atto.takeWhile (/= ' ')
+    Atto.space
+    nicks <- Atto.takeWhile (/= ' ')
+    Atto.space
+    Atto.char ':'
+    text <- Atto.takeText
     return $ Kick nick name host chans nicks text
 
 privmsg = do
     (nick, name, host) <- user <|> network
-    A.string "PRIVMSG"
-    A.space
-    dest <- A.takeWhile (/= ' ')
-    A.space
-    A.char ':'
-    text <- A.takeText
+    Atto.string "PRIVMSG"
+    Atto.space
+    dest <- Atto.takeWhile (/= ' ')
+    Atto.space
+    Atto.char ':'
+    text <- Atto.takeText
     return $ Privmsg nick name host dest text
 
 notice = do
     (nick, name, host) <- user <|> network
-    A.string "NOTICE"
-    A.space
-    dest <- A.takeWhile (/= ' ')
-    A.space
-    A.char ':'
-    text <- A.takeText
+    Atto.string "NOTICE"
+    Atto.space
+    dest <- Atto.takeWhile (/= ' ')
+    Atto.space
+    Atto.char ':'
+    text <- Atto.takeText
     return $ Notice nick name host dest text
 
 -- FIXME i have no idea what a KILL looks like
-kill :: Parser IRC
+kill :: Parser IrcAST
 kill = return $ Kill "" ""
 
 -- "PING :irc.rizon.us"
 ping = do
-    A.string "PING"
-    A.string " :"
-    server <- A.takeText
+    Atto.string "PING"
+    Atto.string " :"
+    server <- Atto.takeText
     return $ Ping server
 
-ircError :: Parser IRC
+ircError :: Parser IrcAST
 ircError = do
-    A.string "ERROR"
-    A.string " :"
-    text <- A.takeText
+    Atto.string "ERROR"
+    Atto.string " :"
+    text <- Atto.takeText
     return $ Error text
 
 numeric = do
-    A.char ':'
-    A.takeWhile (/= ' ')
-    A.space
-    num <- A.takeWhile1 (`elem` ['0' .. '9'])
-    A.space
-    A.takeWhile (/= ' ')
-    A.skipWhile (`elem` ['*', '=', '@'])
-    c <- fmap T.stripEnd <$> cmd
-    text <- (A.try $ colonText) <|> pure ""
+    Atto.char ':'
+    Atto.takeWhile (/= ' ')
+    Atto.space
+    num <- Atto.takeWhile1 (`elem` ['0' .. '9'])
+    Atto.space
+    Atto.takeWhile (/= ' ')
+    Atto.skipWhile (`elem` ['*', '=', '@'])
+    c <- fmap Text.stripEnd <$> cmd
+    text <- (Atto.try $ colonText) <|> pure ""
     return $ Numeric num c text
   where
-    colonText = A.skipWhile (/= ':') >> A.char ':' >> A.takeText
-    cmd = (fmap Just . A.try $ A.takeWhile1 (/= ':')) <|> pure Nothing
+    colonText = Atto.skipWhile (/= ':') >> Atto.char ':' >> Atto.takeText
+    cmd = (fmap Just . Atto.try $ Atto.takeWhile1 (/= ':')) <|> pure Nothing
 
 -- ":irc.rizon.no CAP * ACK :multi-prefix"
 -- ":irc.rizon.no CAP Tombot ACK :multi-prefix"
 -- http://www.leeh.co.uk/draft-mitchell-irc-capabilities-02.html
 cap = do
-    A.try $ do
-        A.char ':'
-        A.skipWhile (/= ' ')
-        A.space
-    A.string "CAP"
-    nick <- A.takeWhile1 (/= ' ')
-    A.space
-    A.skipWhile (/= ' ')
-    A.space
-    subcap <- A.choice subcaps
-    text <- A.takeText
+    Atto.try $ do
+        Atto.char ':'
+        Atto.skipWhile (/= ' ')
+        Atto.space
+    Atto.string "CAP"
+    nick <- Atto.takeWhile1 (/= ' ')
+    Atto.space
+    Atto.skipWhile (/= ' ')
+    Atto.space
+    subcap <- Atto.choice subcaps
+    text <- Atto.takeText
     return $ Cap subcap text
   where
     subcaps = ["LS", "LIST", "REQ", "ACK", "NAK", "CLEAR", "END"]
