@@ -93,7 +93,7 @@ import qualified Text.Taggy.Lens as Taggy
 -- | Service-agnostic functions
 funcs :: Map Text (Funk s)
 funcs = toFunks [ ("!", ddg, Online)
-                , ("b", ban, Mod)
+                , ("ban", ban, Mod)
                 , ("say", echo, Online)
                 , ("kick", kick, Mod)
                 , ("voice", voice, Mod)
@@ -150,7 +150,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("topic", topic, Online)
                 , ("cajoin", cajoin, Online)
                 , ("markov", markov, Online)
-                , ("botprefixes", prefix, Online)
+                , ("prefixes", prefix, Online)
                 , ("romaji", romaji, Online)
                 , ("predict", predict, Online)
                 , ("mirror", rwords, Online)
@@ -168,10 +168,6 @@ ircFuncs = toFunks [ ("<", priv, Online)
 
 -- }}}
 
-
--- TODO
-about :: Text -> Mind s Text
-about _ = return ""
 
 -- TODO filters
 -- | Low level anime releases function, instead returning a list of strings.
@@ -567,7 +563,16 @@ eval str = do
 -- TODO time argument
 -- | Create an event. Useful with `sleep'.
 event :: Text -> Mind s Text
-event str = return ""
+event str = modLocalStored "events" $ \events -> do
+    --
+  where
+    args = Text.words str
+    mayName = atMay 0 args
+    mayTime :: Maybe Int
+    mayTime = join
+            $ fmap (\n -> bool (const Nothing) Just (n >= 1000) n)
+            $ join $ readMay <$> atMay 1 args
+    eventFunc = Text.unwords <$> drop 2 args
 
 exchangeRateCache = unsafePerformIO $ newEmptyTMVarIO
 
