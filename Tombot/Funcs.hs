@@ -41,6 +41,7 @@ import qualified Data.Attoparsec.Text as A
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
 import qualified Data.ByteString.UTF8 as BU
+import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Char (toLower, isLower, isAlphaNum)
 import Data.Coerce
@@ -65,7 +66,7 @@ import Data.Time (utcToLocalTime, formatTime, defaultTimeLocale
                  )
 import Data.Time.Clock.POSIX
 import Data.Vector (Vector)
-import qualified Data.Vector as V
+import qualified Data.Vector as Vec
 
 import Debug.Trace
 
@@ -75,6 +76,7 @@ import Network.HTTP (urlDecode, urlEncode)
 import qualified Network.Wreq as Wreq
 
 import System.Exit (ExitCode(ExitSuccess))
+import System.FilePath.Posix ((</>))
 import System.IO (hClose)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Random (randomRIO)
@@ -622,7 +624,7 @@ food str = do
             obj <- join $ Aes.decode . (^. Wreq.responseBody) <$> hush er
 
             let recipes = food2recipes obj
-            recipe <- recipes V.!? n
+            recipe <- recipes Vec.!? n
 
             return $ mconcat [food2title recipe, ": ", food2f2f_url recipe]
 
@@ -711,19 +713,12 @@ funcsList str = do
     allowedstr = let (x, y) = show . words . Text.unpack <$> bisect (== ' ') str
                  in unwords [Text.unpack x, y]
 
--- TODO
--- TODO specify server/channel
--- | Global message.
-glob :: Text -> Mind s Text
-glob str = do
-    return ""
-
 -- TODO add more greetings
 -- | Greeting from the bot.
 greet :: Text -> Mind s Text
 greet str = do
     dir <- fmap _confDirectory seeConfig
-    mgreets <- readConfig $ dir <> "greet"
+    mgreets <- readConfig $ dir </> "greet"
     let len = maybe 0 length mgreets
     n <- liftIO $ randomRIO (0, len - 1)
     return $ maybe "" (flip (atDef "") n) mgreets
@@ -733,16 +728,20 @@ greet str = do
 help :: Text -> Mind s Text
 help str = do
     dir <- fmap _confDirectory seeConfig
-    mhelps <- readConfig $ dir <> "help"
+    mhelps <- readConfig $ dir </> "help"
     mschans <- readServerStored "letfuncs"
     edest <- sees _currDestination
+
     let msfuncs = Map.unions . Map.elems <$> mschans
         dest = either _userId _chanName edest
         mlfuncs = join $ Map.lookup dest <$> mschans
         mlsfuncs = Map.union <$> mlfuncs <*> msfuncs
+
     liftIO $ print mhelps >> print mlsfuncs
+
     let mboth = mhelps <> mlsfuncs
-    let mhelp = join $ Map.lookup string <$> mboth
+        mhelp = join $ Map.lookup string <$> mboth
+
     return $ maybe "" id mhelp
   where
     string = if Text.null $ Text.strip str
@@ -761,9 +760,11 @@ history str = do
         filters' = map (Text.pack . tailSafe . Text.unpack) filters
 
     edest <- sees _currDestination
+
     let dest = either _userId _chanName edest
 
     (rts :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
+
     let ts = do
             (date, mesg, nick, chnl, miden) <- reverse rts
             let t = date <> "\t" <> nick <> "\t" <> mesg
@@ -784,56 +785,70 @@ history str = do
 -- XXX search str in rls, up to strength defined in "s"
 markov :: Text -> Mind s Text
 markov str = do
-    let args = V.take s . V.fromList $ Text.words str
+    let args = Vec.take strength . Vec.fromList $ Text.words str
     (rls :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
 
-    let mesgs = V.map (view _2) $ V.fromList rls
+    let mesgs = Vec.map (view _2) $ Vec.fromList rls
         -- Generate all s length word combinations of a message
         f :: Text -> Vector $ Vector Text
-        f t = let ws = V.fromList $ Text.words t
-                  ns = V.iterateN (V.length ws) (+1) 0
-                  noShorts = V.takeWhile ((>=(s*2)) . V.length)
-                  wordGroups = V.scanl (\b _ -> V.drop 1 b) ws ns
-              in V.map (V.take (s*2)) . noShorts $ wordGroups
+        f t = let ws = Vec.fromList $ Text.words t
+                  ns = Vec.iterateN (Vec.length ws) (+1) 0
+                  noShorts = Vec.takeWhile ((>=(strength*2)) . Vec.length)
+                  wordGroups = Vec.scanl (\b _ -> Vec.drop 1 b) ws ns
+              in Vec.map (Vec.take (strength*2)) . noShorts $ wordGroups
         chains :: Vector $ Vector Text
-        chains = join $ V.map f mesgs
+        chains = join $ Vec.map f mesgs
 
     -- Random starting chain
-    n <- liftIO $ randomRIO (0, V.length chains - 1)
+    n <- liftIO $ randomRIO (0, Vec.length chains - 1)
     -- String chains to use, i.e. total length of words * s?
-    rlen <- liftIO $ randomRIO (10, 50)
+    rlen <- liftIO $ randomRIO (10, 100)
 
     -- Use user supplied string if it isn't empty or just whitespace
-    let mchain = Just args >|> ((args <|<) <$> chains `V.indexM` n)
+    let mchain = Just args >|> ((args <|<) <$> chains Vec.!? n)
 
-    generated <- Text.unwords . V.toList . join <$> maybe (pure mempty) (chainer rlen chains) mchain
-
-    liftIO $ do
-        putStrLn ""
-        print (take 5 rls)
-        print (V.take 5 chains)
-        print n >> print rlen >> print mchain
-        putStrLn ""
+    generated <- Text.unwords . Vec.toList . join <$> maybe (pure mempty) (chainer rlen chains) mchain
 
     return generated
 
   where
-    s = 2 -- XXX markov chain strength
+    -- XXX markov chain strength
+    strength = 2
     matcher :: vt ~ Vector Text => vt -> Vector vt -> Vector vt
     matcher c cs = do
         cm <- cs
-        guard $ not (V.null c || V.null cm)
-        let ciAlphaNums = V.map (CI.mk . Text.filter isAlphaNum)
-        guard $ ciAlphaNums (V.drop s c) == ciAlphaNums (V.take s cm)
+        guard $ not (Vec.null c || Vec.null cm)
+
+        let ciAlphaNums :: Vector Text -> Vector $ CI Text
+            ciAlphaNums = Vec.map (CI.mk . Text.filter isAlphaNum)
+
+            currentTail = ciAlphaNums $ Vec.drop (Vec.length c - strength) c
+            nextInit = ciAlphaNums $ Vec.take strength cm
+
+        guard $ currentTail == nextInit
+
         return cm
+
     chainer :: vt ~ Vector Text => Int -> Vector vt -> vt -> Mind s $ Vector vt
-    chainer 0 cs c = pure $ V.singleton c
+    chainer 0 cs c = pure $ Vec.singleton c
     chainer n cs c = do
         let mcs = matcher c cs
-        liftIO $ print (V.length mcs)
-        n <- liftIO $ randomRIO (0, V.length mcs - 1)
-        let mc = mcs `V.indexM` n
-        maybe (pure $ V.singleton c) (\jc -> (V.take s c `V.cons`) <$> chainer (n-1) cs jc) mc
+
+        n <- liftIO $ randomRIO (0, Vec.length mcs - 1)
+
+        let mc = mcs Vec.!? n
+
+        maybe (pure $ Vec.singleton c) (\jc -> (Vec.take strength c `Vec.cons`) <$> chainer (n-1) cs jc) mc
+
+
+predictOldLogLength :: TVar Int
+predictOldLogLength = unsafePerformIO $ newTVarIO 0
+
+predictOldTree :: TVar $ Map Idiom $ Vector $ Map Idiom Int
+predictOldTree = unsafePerformIO $ newTVarIO Map.empty
+
+predictOldCorpus :: TVar $ Map Idiom (Int, Int)
+predictOldCorpus = unsafePerformIO $ newTVarIO Map.empty
 
 -- XXX use a cache for the predictions (and corpus?)
 predict :: Text -> Mind s Text
@@ -844,23 +859,41 @@ predict str = do
         putStrLn "PREDICTING"
         getPOSIXTime
 
+    let !newLength = length rls
+
+    oldLength <- liftIO $ atomically $ do
+        ol <- readTVar predictOldLogLength
+        writeTVar predictOldLogLength newLength
+
+        return ol
+
+    let allMsgs = map (view _2) rls
+        -- New messages
     let msgs :: [Text]
-        !msgs = map (view _2) rls
+        !msgs = take (newLength - oldLength) allMsgs
 
         vmsgs :: Vector Text
-        !vmsgs = V.fromList msgs
+        !vmsgs = Vec.fromList msgs
 
-        pt :: Map Idiom $ Vector $ Map Idiom Int
-        pt = makePredictionTree vmsgs
+    oldPT <- liftIO $ readTVarIO predictOldTree
 
-        totalMsgs :: Int
-        !totalMsgs = V.length vmsgs
+    let pt :: Map Idiom $ Vector $ Map Idiom Int
+        pt = appendPredictionTree vmsgs oldPT
+
+    liftIO $ atomically $ writeTVar predictOldTree pt
+
+    let totalMsgs :: Int
+        !totalMsgs = Vec.length vmsgs
+
+    oldCorpus <- liftIO $ readTVarIO predictOldCorpus
 
         -- XXX what do we do with the total count (snd)
-        corpus :: Map Idiom (Int, Int)
-        corpus = makeCorpus msgs
+    let corpus :: Map Idiom (Int, Int)
+        corpus = appendCorpus msgs oldCorpus
 
-        countIdiomMsgs :: Idiom -> Int
+    liftIO $ atomically $ writeTVar predictOldCorpus corpus
+
+    let countIdiomMsgs :: Idiom -> Int
         countIdiomMsgs w = maybe 0 fst $ Map.lookup w corpus
 
         getIdiomSuccessors :: Idiom -> Maybe $ Vector $ Map Idiom Int
@@ -874,14 +907,14 @@ predict str = do
         mergeWith :: Monoid a
                    => (a -> a -> a) -> Vector a -> Vector a -> Vector a
         mergeWith f xs ys =
-            let pxs = xs <> V.replicate (V.length ys - V.length xs) mempty
-                pys = ys <> V.replicate (V.length xs - V.length ys) mempty
-            in V.zipWith f pxs pys
+            let pxs = xs <> Vec.replicate (Vec.length ys - Vec.length xs) mempty
+                pys = ys <> Vec.replicate (Vec.length xs - Vec.length ys) mempty
+            in Vec.zipWith f pxs pys
 
         merger :: v ~ (Vector $ Map Idiom Int) => (Int, v) -> v -> v
         merger (i, v) av =
             let f ma mb = Map.intersectionWith (+) ma mb <> ma
-            in mergeWith f (V.replicate i mempty <> v) av
+            in mergeWith f (Vec.replicate i mempty <> v) av
 
         merged :: Vector $ Map Idiom Int
         merged = foldr merger mempty $ zip [0 .. ] lvmws
@@ -890,13 +923,19 @@ predict str = do
             let listWords = Map.toList mws
                 probs = do
                     (w, prob) <- listWords
+                        -- 
                     let tf = fromIntegral prob
+                        -- ALL messages
                         n = fromIntegral totalMsgs
+                        -- Quantity of messages word appeared within
                         nt = fromIntegral $ countIdiomMsgs w
                         idf = log $ 1 + (n / nt)
+
                     when (isInfinite nt) $ do
                         traceM (show nt) >> traceM (show idf)
+
                     when (nt == 0) $ traceM $ show w <> " doesn't exist?"
+
                     return . ceiling $ tf + idf
 
             mn <- randomIndexMay probs
@@ -913,7 +952,7 @@ predict str = do
                     return $ merger (i, idiomSuccs) oldMerged
 
                 m :: Map Idiom Int
-                m = maybe mempty id . join $ fmap (V.!? i) mayNewMerged
+                m = maybe mempty id . join $ fmap (Vec.!? i) mayNewMerged
 
             mayNewWord <- pickWord m
 
@@ -1259,11 +1298,11 @@ stat str = do
         mwhenUserStat (>= Admin) $ do
             servhost <- _servHost <$> sees _currServer
             dir <- _confDirectory <$> seeConfig
-            mservs <- readConfig $ dir <> "UserStats"
+            mservs <- readConfig $ dir </> "UserStats"
             let f = maybe (Just . Map.delete nick) ((Just .) . Map.insert nick) mv
                 mservs' = Map.alter (join . fmap f) servhost <$> mservs
                 servs = maybe mempty id mservs'
-            writeConf (dir <> "UserStats") servs
+            writeConf (dir </> "UserStats") servs
             e <- modUser nick $ over userStatus (\s -> maybe s id mv)
             return $ either id (const "") e
   where
@@ -1277,10 +1316,24 @@ sleep str = do
         Just n -> liftIO $ threadDelay $ fromEnum $ 10^6*n
         _ -> return ()
 
--- TODO
 -- | `store' adds a new func to the Map and runs the contents through `eval'.
 store :: Text -> Mind s Text
-store str = return ""
+store str = do
+    let isFunc = Map.member name funcs
+
+    mlfuncs <- (readLocalStored @(Map Text Text) "letfuncs")
+
+    liftIO $ print $ maybe (-1) Map.size mlfuncs
+
+    let lfuncs = maybe mempty id mlfuncs
+        inserter f = if Text.null $ Text.strip func
+                     then Map.delete name
+                     else Map.insert name f
+
+    mvoid . when (not isFunc) $ do
+        modLocalStored "letfuncs" $ inserter func
+  where
+    (name, func) = first Text.toLower $ bisect (== ' ') str
 
 -- | Store a message for a user that is printed when they talk next.
 tell :: Text -> Mind s Text
@@ -1394,7 +1447,7 @@ userlist :: forall s. Text -> Mind s Text
 userlist _ = do
     edest <- sees _currDestination
     users <- sees $ Map.elems . _servUsers . _currServer
-    --liftIO $ putStrLn "Users" >> print edest >> print users
+
     return $ either _userNick (chanNicks users) edest
   where
     chanNicks :: [User s] -> Channel s -> Text
@@ -1411,6 +1464,7 @@ verbosity str = do
     else mwhenUserStat (== BotOwner) $ do
         mapConfig $ over confVerbosity $ \v ->
             maybe v id $ readMay $ Text.unpack str
+
         return ""
 
 -- | Give voice to users.

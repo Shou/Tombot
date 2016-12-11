@@ -284,7 +284,7 @@ stateConfigt = unsafePerformIO newEmptyTMVarIO
 {-# NOINLINE recvTChan #-}
 recvTChan = unsafePerformIO newTChanIO
 
-stateUsers :: TVar $ Map (CI Text) $ Map (CI Text) (Tombot.User IRC.IRC)
+stateUsers :: TVar $ Map (CI Text) (Tombot.User IRC.IRC)
 {-# NOINLINE stateUsers #-}
 stateUsers = unsafePerformIO $ newTVarIO mempty
 
@@ -330,11 +330,11 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
                    Tombot.User { Tombot._userNick = userUsername user
                                , Tombot._userName = userUsername user
                                , Tombot._userId = CI.mk $ userId user
-                               , Tombot._userService = def
+                               , Tombot._userService = (def @(Tombot.UserService IRC.IRC))
                                , Tombot._userStatus = Tombot.Online
                                , Tombot._userChannels = mempty
                                }
-    atomically $ modifyTVar' stateUsers $ Map.insert gid users
+    atomically $ modifyTVar' stateUsers $ Map.union users
     print $ flip map members $ userUsername . memberUser
 
 onMessage :: Connection -> Dispatch MessageCreate -> IO ()
@@ -344,7 +344,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
     atomically $ swapTMVar stateSeq $ maybe 0 id s
     atomically $ writeTChan recvTChan $ messagecContent d
 
-    users <- atomically $ readTMVar stateUsers
+    users <- atomically $ readTVar stateUsers
     config <- atomically $ readTVar =<< readTMVar stateConfigt
     tid <- myThreadId
     let chanText = fromString $ messagecChannel_id d
@@ -362,7 +362,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         -- XXX idiot???
         nick = maybe "idiot" id . Map.lookup "username" $ messagecAuthor d
         user = Tombot.User nick "" "" (Set.singleton cichan) Tombot.Online def
-        users' = Map.mapKeys . flip Map.map users
+        users' = flip Map.map users
                $ Lens.over Tombot.userChannels $ Set.insert cichan
         bot = Tombot.Bot { Tombot._botNick = "Tombot"
                          , Tombot._botName = "Tombot"

@@ -318,8 +318,10 @@ readLocalStored :: (Read a) => FilePath -> Mind s (Maybe a)
 readLocalStored path = do
     mchans <- readServerStored path
     edest <- sees _currDestination
+
     let dest = CI.original $ either _userId _chanName edest
         mstoreds = join $ Map.lookup dest <$> mchans
+
     return mstoreds
 
 mapConfig :: (Config -> Config) -> Mind s ()
@@ -329,11 +331,11 @@ mapConfig = sets . over currConfig
 readServerStored :: (Read a) => FilePath -> Mind s (Maybe a)
 readServerStored path = do
     !serv <- sees $ _servHost . _currServer
-    liftIO $ print serv
     !dir <- _confDirectory <$> fmap _currConfig see
-    liftIO $ print $ dir </> path
     mservers <- readConfig $ dir </> path
+
     let mchans = join $ Map.lookup serv <$> mservers
+
     return mchans
 
 -- | Modify a local (to the server and channel) value stored in a file in the
@@ -828,31 +830,48 @@ tokenizer = do
         m <- A.takeWhile1 isDigit
         return $ n <> "." <> m
 
--- XXX (quantity of messages contained in, total quantity)
+-- | Make a 'corpus': a map of words and their associated quantities
+--      - Quantity of messages the word is contained within
+--      - Total quantity: how many times the word appears anywhere
+--        including its own message
 makeCorpus :: [Text] -> Map Idiom (Int, Int)
-makeCorpus = Map.unionsWith (\(an, ap) (bn, bp) -> (an+bn, ap+bp)) . map f
+makeCorpus = flip appendCorpus Map.empty
+
+-- TODO review this
+-- | Append to an existing corpus
+appendCorpus :: [Text] -> Map Idiom (Int, Int) -> Map Idiom (Int, Int)
+appendCorpus msgs cs = Map.unionsWith (\(an, ap) (bn, bp) -> (an+bn, ap+bp)) $ map f msgs
   where
     f msg =
         let is = map mkIdiom $ Text.words msg
-        in foldr (Map.alter (Just . maybe (1, 1) (_2 +~ 1))) mempty is
+        in foldr (Map.alter (Just . maybe (1, 1) (_2 +~ 1))) cs is
 
-getPredictionTree :: IO (Map Idiom $ Vector $ Map Idiom Int)
+getPredictionTree :: IO $ Map Idiom $ Vector $ Map Idiom Int
 getPredictionTree = do
     (rls :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
     let vmsgs = Vec.fromList $ map (view _2) rls
     return $ makePredictionTree vmsgs
 
+-- | Make a prediction tree:
+--   a map of words and the associated vector, which again contains
+--   a map of trailing words (at any position, not just directly
+--   following) and their frequencies.
 makePredictionTree :: Vector Text -> Map Idiom $ Vector $ Map Idiom Int
-makePredictionTree msgs = Vec.foldr wordsToMap Map.empty (wordGroups msgs)
+makePredictionTree msgs = appendPredictionTree msgs Map.empty
+
+appendPredictionTree :: Vector Text
+                     -> Map Idiom $ Vector $ Map Idiom Int
+                     -> Map Idiom $ Vector $ Map Idiom Int
+appendPredictionTree msgs pt = Vec.foldr wordsToMap pt (wordGroups msgs)
+
+wordGroups :: Vector Text -> Vector $ Vector Idiom
+wordGroups = Vec.map (Vec.map mkIdiom) . join . Vec.map msgWordGroups
 
 msgWordGroups :: Text -> Vector $ Vector Text
 msgWordGroups t =
     let ws = Vec.fromList $ Text.words t
         ns = Vec.iterateN (Vec.length ws) (+1) 0
     in Vec.takeWhile (/= []) $ Vec.scanl (\b _ -> Vec.drop 1 b) ws ns
-
-wordGroups :: Vector Text -> Vector $ Vector Idiom
-wordGroups = Vec.map (Vec.map mkIdiom) . join . Vec.map msgWordGroups
 
 wordsToMap :: m ~ (Map Idiom $ Vector $ Map Idiom Int)
            => Vector Idiom -> m -> m

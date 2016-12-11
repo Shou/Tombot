@@ -186,7 +186,7 @@ data Server s = Server { _servHost :: !Text
                        , _servPort :: !Integer
                        , _servChannels :: Map (CI Text) (Channel s)
                        , _servStatus :: ServerStatus
-                       , _servUsers :: Map (CI Text) (Users s)
+                       , _servUsers :: Map (CI Text) (User s)
                        , _servBot :: Bot s
                        , _servService :: ServerService s
                        }
@@ -247,7 +247,7 @@ type Decide s e = ExceptT e $ Mind s
 type Funky s = StateT StFunk (Mind s)
 
 type Modes = Map Text Mode
-type Users s = Map (CI Text) (User s)
+type Users s = Map Nick (User s)
 
 instance SQL.ToField Nick where
     toField = SQL.toField . CI.original
