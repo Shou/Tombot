@@ -26,7 +26,8 @@ import qualified Tombot.Utils as Tombot
 
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
 import Control.Concurrent.STM
-import Control.Exception (try, SomeException(..))
+import Control.Exception (SomeException(..))
+import qualified Control.Exception as Except
 import Control.Lens as Lens
 import Control.Monad (forever, join, unless, void, when, forM_)
 import Control.Monad.IO.Class
@@ -267,11 +268,11 @@ opts = defaults
      & header "Content-Type" .~ ["application/json"]
 
 props = Map.fromList [ ("$os", "linux")
-                   , ("$browser", "Tombot")
-                   , ("$device", "Tombot")
-                   , ("$referrer", "")
-                   , ("$referring_domain", "")
-                   ]
+                     , ("$browser", "Tombot")
+                     , ("$device", "Tombot")
+                     , ("$referrer", "")
+                     , ("$referring_domain", "")
+                     ]
 
 
 {-# NOINLINE stateSeq #-}
@@ -290,7 +291,7 @@ stateUsers = unsafePerformIO $ newTVarIO mempty
 
 
 trySome :: IO a -> IO $ Either SomeException a
-trySome = try
+trySome = Except.try
 
 sendJSON obj conn = do
     let json = encode obj
@@ -448,7 +449,7 @@ runDiscord :: TVar Tombot.Config -> IO ()
 runDiscord configt = do
     setLocaleEncoding utf8
     atomically $ putTMVar stateConfigt configt
-    websockInit
+    websockInit `Except.onException` websockInit -- XXX looks dangerous
 
     --r <- getWith opts gatewayURL
     --let responseText = r ^. responseBody

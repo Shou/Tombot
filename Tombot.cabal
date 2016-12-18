@@ -29,6 +29,7 @@ Executable tombot
         filepath,
         lens,
         lens-aeson,
+        hashable,
         HTTP,
         http-types,
         mtl,

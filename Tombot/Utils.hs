@@ -48,7 +48,11 @@ import Data.Set (Set)
 import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
+import qualified Data.Text.Encoding.Error as TextErr
 import qualified Data.Text.IO as Text
+import qualified Data.Text.Lazy as TextLazy
+import qualified Data.Text.Lazy.Encoding as TextLazy
 import Data.Vector (Vector)
 import qualified Data.Vector as Vec
 
@@ -447,18 +451,34 @@ httpHead :: MonadIO m => String -> m (Map (CI String) String)
 httpHead url = Map.fromList . view _2 <$> httpGetResponse url
 
 -- | Google translate
-gtranslate :: MonadIO m => String -> String -> String
+googleTranslate :: MonadIO m => String -> String -> String
            -> m (Maybe ([[Text]], (Text, [Text])))
-gtranslate sl tl q = do
-    let url :: [String]
-        url = [ "http://translate.google.com"
-              , "/translate_a/t"
-              , "?client=t&hl=en"
-              , "&sl=" <> sl <> "&tl=" <> tl <> "&q=" <> urlEncode q
-              ]
-    jsonStr <- httpGetString $ concat url
-    let m = A.maybeResult $ A.parse transparser (Text.pack jsonStr) `A.feed` ""
-    unless (isJust m) $ warn jsonStr
+googleTranslate sl tl q = do
+    let url :: String
+        url = mconcat
+          [ "https://translate.googleapis.com"
+          , "/translate_a/single"
+          , "?client=gtx"
+          , "&sl=", sl, "&tl=", tl, "&q=", urlEncode q 
+          ]
+
+        -- OLD URL
+--        ourl =
+--          [ "http://translate.google.com"
+--          , "/translate_a/t"
+--          , "?client=t&hl=en"
+--          , "&sl=" <> sl <> "&tl=" <> tl <> "&q=" <> urlEncode q
+--          ]
+
+    request <- try $ Wreq.getWith wreqOpts url
+
+    let jsonText = request ^. _Right . Wreq.responseBody
+                 . Lens.to BSL.toStrict
+                 . Lens.to (Text.decodeUtf8With TextErr.lenientDecode)
+        m = A.maybeResult $ A.parse transparser jsonText `A.feed` ""
+
+    unless (isJust m) $ warn jsonText
+
     return m
 
 -- }}}
@@ -486,11 +506,15 @@ writeFileSafe p t = liftIO $ do
 
 -- {{{ Database utils
 
+{-# NOINLINE memoryDBRef #-}
 memoryDBRef = unsafePerformIO $ SQL.open ":memory:" >>= newTMVarIO
+
 memoryDB :: MonadIO m => m SQL.Connection
 memoryDB = liftIO $ atomically $ readTMVar memoryDBRef
 
+{-# NOINLINE fileDBRef #-}
 fileDBRef = unsafePerformIO $ SQL.open "db" >>= newTMVarIO
+
 fileDB :: MonadIO m => m SQL.Connection
 fileDB = liftIO $ atomically $ readTMVar fileDBRef
 

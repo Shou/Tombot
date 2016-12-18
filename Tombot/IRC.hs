@@ -296,23 +296,32 @@ printTell send (Privmsg nick _ _ dest text) = unlessBanned $ do
 -- |
 onMatch :: (Text -> Text -> Mind IRC ()) -> IrcAST -> Mind IRC ()
 onMatch send irc@(Privmsg nick name host dest text) = unlessBanned $ do
+    (mlon :: Maybe _) <- readLocalStored "respond"
     (msons :: Maybe (Map Text _)) <- readServerStored "respond"
-    let mons = Map.unions . Map.elems <$> msons
+
+    let mons = mlon <> (Map.unions . Map.elems <$> msons)
     let ons :: [(String, (Bool, Int, String))]
         ons = sortBy (comparing $ snd3 . snd) $ maybe mempty Map.toList mons
+
     void . decide $ forM_ ons $ \(match, (ins, n, resp)) -> deci . decide $ do
         let regex = mkRegexWithOpts match False ins
+
         emins <- try $ return $! matchRegex regex $ T.unpack text
+
         when (isLeft emins) $ do
             verb ("onMatch: " <> show emins)
             throwError ()
+
         let mins = either (const $ Just []) id emins
+
         unless (isJust mins) $ throwError ()
+
         let ins = fromJust mins
             -- FIXME who needs indexes larger than 9 anyway?!?!
             indexes = [ '\\' : show x | x <- [0 .. 9]]
             replacer = zipWith replace indexes (T.unpack text : ins)
             resp' = foldr ($) resp replacer
+
         lift $ runLang send $ irc { privText = T.pack resp' }
   where
     replace a b c = T.unpack $ T.replace (T.pack a) (T.pack b) (T.pack c)

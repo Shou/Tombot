@@ -100,7 +100,6 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("currency", exchange, Online)
                 , ("find", findMsg, Online)
                 , ("food", food, Online)
-                , ("me", me, Online)
                 , ("lastfm", lastfm, Online)
                 , ("in", match, Online)
                 , ("manga", manga, Online)
@@ -123,6 +122,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("urban", urbandict, Online)
                 , ("bots", bots, Online)
                 , ("eval", eval, Online)
+                , ("expand", expand, Online)
                 , ("help", help, Online)
                 , ("history", history, Online)
                 , ("http", http, Online)
@@ -151,7 +151,6 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("cajoin", cajoin, Online)
                 , ("markov", markov, Online)
                 , ("prefixes", prefix, Online)
-                , ("romaji", romaji, Online)
                 , ("predict", predict, Online)
                 , ("mirror", rwords, Online)
                 , ("shadify", shadify, Online)
@@ -162,6 +161,7 @@ funcs = toFunks [ ("!", ddg, Online)
 
 ircFuncs :: Map Text (Funk IRC)
 ircFuncs = toFunks [ ("<", priv, Online)
+                   , ("me", ircMe, Online)
                    , ("host", host, Online)
                    , ("mode", mode, Mod)
                    ]
@@ -555,24 +555,104 @@ echo = return
 -- | Evaluate KawaiiLang.
 eval :: Text -> Mind s Text
 eval str = do
-    -- XXX very spooky??? i.e. does this allfunc magic work?
     fs <- Map.union funcs <$> serverfuncs funcs
     botparse fs str >>= compile fs
 
+-- TODO
+-- | Expand KawaiiLang down to base functions and operators.
+expand :: Text -> Mind s Text
+expand str = do
+    fs <- Map.union funcs <$> serverfuncs funcs
+    kl <- botparse fs str
+
+    liftIO $ print kl
+
+    return ""
+
+eventThreadsVar :: TVar $ Map Text $ Map (CI Text) $ Map Text ThreadId
+{-# NOINLINE eventThreadsVar #-}
+eventThreadsVar = unsafePerformIO $ newTVarIO Map.empty
+
+{-
+withLocalValue :: Monoid a
+               => Map Text $ Map (CI Text) a
+               -> (a -> Mind s b)
+               -> Mind s $ Map Text $ Map (CI Text) b
+withLocalValue m f = do
+    serv <- sees $ _servHost . _currServer
+    dest <- sees $ either _userId _chanName . _currDestination
+
+    -- Get the value
+    let ma = m ^? at serv . _Just . at dest . _Just
+
+    -- Perform the action on the value
+    ma' <- f $ maybe mempty id ma
+
+    -- Set the value and return the new Map
+    return $ m & at serv . _Just . at dest .~ ma'
+-}
+
+-- TODO actually print to channel
+-- Load stored threads, check if their threads are active,
+-- otherwise fork a thread for them. Add new event too.
 -- XXX use mWhenUserStat (>= Admin) when event time argument < 1000
--- TODO time argument
--- | Create an event. Useful with `sleep'.
+-- | Create a timed event.
 event :: Text -> Mind s Text
-event str = modLocalStored "events" $ \events -> do
-    --
+event str = return "" {-do
+    storedThreads <- liftIO $ readTVarIO eventThreadsVar
+
+    -- :: Map Text (POSIXTime, Int -| RepeatTime, Text -| KawaiiLang)
+    newMap <- withLocalValue storedThreads $ \threadMap -> do
+        -- Add event
+        if not $ Text.null $ Text.strip eventFunc then do
+
+            currentTime <- liftIO getPOSIXTime
+
+            tid <- forkMi $ forever $ do
+                liftIO $ threadDelay $ maybe 1000 id mayTime
+                liftIO . print =<< eval eventFunc
+
+            liftIO $ putStr "Event made " >> print tid
+
+{-
+            let mevent = do
+                    event <- join $ Map.lookup <$> mayName <*> pure threadMap
+
+                    repeatTime <- mayTime
+
+                    return $ event & _1 ?~ currentTime
+                                   & _2 ?~ repeatTime
+                                   & _3 ?~ eventFunc
+                                   & _4 ?~ tid
+
+-}
+            let newMap = Map.insert <$> mayName
+                                    <*> pure tid
+                                    <*> pure threadMap
+
+            return $ maybe threadMap id newMap
+
+        -- Delete event
+        else do
+            let mtid :: Maybe ThreadId
+                mtid = join $ Map.lookup <$> mayName <*> pure threadMap
+                newMap = Map.delete <$> mayName <*> pure threadMap
+
+            -- Kill thread if it exists
+            maybe (return ()) (liftIO . killThread) mtid
+
+            return $ maybe threadMap id newMap
+
+    --mvoid $ modLocalStored "events" id
+    return ""-}
   where
-    args = Text.words str
-    mayName = atMay 0 args
+    !args = Text.words str
+    mayName = atMay args 0
     mayTime :: Maybe Int
     mayTime = join
             $ fmap (\n -> bool (const Nothing) Just (n >= 1000) n)
-            $ join $ readMay <$> atMay 1 args
-    eventFunc = Text.unwords <$> drop 2 args
+            $ join $ readMay . Text.unpack <$> atMay args 1
+    eventFunc = Text.unwords $ drop 2 args
 
 exchangeRateCache = unsafePerformIO $ newEmptyTMVarIO
 
@@ -790,60 +870,75 @@ history str = do
 -- XXX search str in rls, up to strength defined in "s"
 markov :: Text -> Mind s Text
 markov str = do
-    let args = Vec.take strength . Vec.fromList $ Text.words str
+    stime <- liftIO $ do
+        putStrLn "MARKOVING"
+        getPOSIXTime
+
+    let strWords = Vec.fromList $ Text.words str
+        args = Vec.drop (Vec.length strWords - strength) strWords
+        idiomArgs = Vec.map mkIdiom args
+
     (rls :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
 
-    let mesgs = Vec.map (view _2) $ Vec.fromList rls
-        -- Generate all s length word combinations of a message
-        f :: Text -> Vector $ Vector Text
-        f t = let ws = Vec.fromList $ Text.words t
-                  ns = Vec.iterateN (Vec.length ws) (+1) 0
-                  noShorts = Vec.takeWhile ((>=(strength*2)) . Vec.length)
-                  wordGroups = Vec.scanl (\b _ -> Vec.drop 1 b) ws ns
-              in Vec.map (Vec.take (strength*2)) . noShorts $ wordGroups
-        chains :: Vector $ Vector Text
-        chains = join $ Vec.map f mesgs
+    let messages = Vec.map (view _2) $ Vec.fromList rls
+        indexes v = Vec.iterateN (Vec.length v) (+1) 0
+
+        g chainMap msg =
+            let msgIdioms :: Vector Idiom
+                msgIdioms = Vec.map mkIdiom $ Vec.fromList $ Text.words msg
+                ns :: Vector Int
+                ns = indexes msgIdioms
+                wordGroups :: Vector $ Vector Idiom
+                wordGroups = Vec.scanl (\ws _ -> Vec.drop 1 ws) msgIdioms ns
+                noShorts = Vec.takeWhile ((>=(strength*2)) . Vec.length)
+                truncate = Vec.map $ Vec.take (strength*2)
+                -- FIXME bad variable name
+                x = Vec.toList $ truncate $ noShorts $ wordGroups
+                wordMap w = Map.singleton (Vec.take strength w) $ Vec.singleton (Vec.drop strength w)
+                wordMaps :: [Map (Vector Idiom) $ Vector $ Vector Idiom]
+                wordMaps = map wordMap x <> [chainMap]
+             in Map.unionsWith (<>) wordMaps
+        chains2 :: Map (Vector Idiom) $ Vector $ Vector Idiom
+        chains2 = Vec.foldl' g Map.empty messages
 
     -- Random starting chain
-    n <- liftIO $ randomRIO (0, Vec.length chains - 1)
+    n2 <- liftIO $ randomRIO (0, Map.size chains2 - 1)
     -- String chains to use, i.e. total length of words * s?
     rlen <- liftIO $ randomRIO (10, 100)
 
-    -- Use user supplied string if it isn't empty or just whitespace
-    let mchain = Just args >|> ((args <|<) <$> chains Vec.!? n)
+    let initPart :: Vector Idiom
+        initPart = maybe (fst $ Map.elemAt n chains2)
+                         (const idiomArgs)
+                         (Map.lookup idiomArgs chains2)
 
-    generated <- Text.unwords . Vec.toList . join <$> maybe (pure mempty) (chainer rlen chains) mchain
+    generated2 <- chainer2 rlen initPart chains2 mempty
+
+    let generated :: Text
+        generated = Vec.foldl' (\acc a -> acc <> origIdiom a <> " ") mempty generated2
+
+    liftIO $ do
+        putStr "DONE MARKOVING "
+        print =<< fmap (flip (-) stime) getPOSIXTime
 
     return generated
 
   where
     -- XXX markov chain strength
     strength = 2
-    matcher :: vt ~ Vector Text => vt -> Vector vt -> Vector vt
-    matcher c cs = do
-        cm <- cs
-        guard $ not (Vec.null c || Vec.null cm)
+    chainer2 :: vi ~ Vector Idiom
+             => Int -> vi -> Map vi $ Vector vi -> vi -> Mind s vi
+    chainer2 0 initPart _ acc = pure $ acc <> initPart
+    chainer2 n initPart chains acc = do
+        let mayTailParts = Map.lookup initPart chains
+            newAcc = acc <> initPart
 
-        let ciAlphaNums :: Vector Text -> Vector $ CI Text
-            ciAlphaNums = Vec.map (CI.mk . Text.filter isAlphaNum)
+        (flip $ maybe $ pure newAcc) mayTailParts $ \tailParts -> do
+            n <- liftIO $ randomRIO (0, Vec.length tailParts - 1)
 
-            currentTail = ciAlphaNums $ Vec.drop (Vec.length c - strength) c
-            nextInit = ciAlphaNums $ Vec.take strength cm
+            let mayRandomTailPart = tailParts Vec.!? n
 
-        guard $ currentTail == nextInit
-
-        return cm
-
-    chainer :: vt ~ Vector Text => Int -> Vector vt -> vt -> Mind s $ Vector vt
-    chainer 0 cs c = pure $ Vec.singleton c
-    chainer n cs c = do
-        let mcs = matcher c cs
-
-        n <- liftIO $ randomRIO (0, Vec.length mcs - 1)
-
-        let mc = mcs Vec.!? n
-
-        maybe (pure $ Vec.singleton c) (\jc -> (Vec.take strength c `Vec.cons`) <$> chainer (n-1) cs jc) mc
+            (flip $ maybe $ pure newAcc) mayRandomTailPart $ \tailPart ->
+                chainer2 (pred n) tailPart chains newAcc
 
 
 predictOldLogLength :: TVar Int
@@ -993,18 +1088,24 @@ host _ = do
 -- | Get a HTTP header from a request.
 http :: Text -> Mind s Text
 http str = do
-    hed <- httpHead $ Text.unpack httpURL
-    return $ maybe "" Text.pack $ Map.lookup (CI.mk $ Text.unpack httpType) hed
-  where
-    (httpType, httpURL) = bisect (== ' ') str
+    request <- try $ Wreq.getWith wreqOpts $ Text.unpack str
 
--- FIXME is this sufficient?
+    return ""
+
 -- | Check if a website is up.
 isup :: Text -> Mind s Text
 isup str = do
-    let url = "http://" <> foldr (flip Text.replace "") str ["https://", "http://"]
-    (_, _, status) <- httpGetResponse (Text.unpack url)
-    return $ if isPrefixOf "2" status then "True" else "False"
+    let turl = "http://" <> foldr (flip Text.replace "") str ["https://", "http://"]
+        url = Text.unpack turl
+
+    request <- try $ Wreq.getWith wreqOpts url
+
+    let status = request ^? _Right
+                          . Wreq.responseStatus
+                          . Wreq.statusCode
+                          . Lens.to (< 400)
+
+    return $ Text.pack $ maybe "False" show status
 
 -- XXX what will the language look like?
 --     CSS inspired language!
@@ -1048,11 +1149,11 @@ manga str = do
         genMangas :: [Text] -> [Text]
         genMangas (date:mangatitle:vol:chp:group:rest) =
             let mangaStr = Text.unwords
-                    [ "\ETX10[" <> Text.strip group <> "]\ETX"
+                    [ "[" <> Text.strip group <> "]"
                     , mangatitle
-                    , "[Ch.\ETX06" <> chp <> "\ETX,"
-                    , "Vol.\ETX06" <> vol <> "\ETX]"
-                    , "(\ETX10" <> date <> "\ETX)"
+                    , "[Ch." <> chp <> ","
+                    , "Vol." <> vol <> "]"
+                    , "(" <> date <> ")"
                     ]
             in mangaStr : genMangas rest
         genMangas _ = []
@@ -1073,8 +1174,8 @@ match str = do
         either (const $ return "") (return . maybe "" (const "True")) emins
 
 -- | Make the bot do an action; also known as /me.
-me :: Text -> Mind s Text
-me str = return $ ctcp $ "ACTION " <> str
+ircMe :: Text -> Mind IRC Text
+ircMe str = return $ ctcp $ "ACTION " <> str
 
 -- | Set the channel mode.
 mode :: Text -> Mind s Text
@@ -1268,13 +1369,6 @@ reveal str = do
   where
     double = first Text.strip . second Text.strip $ bisect (== ' ') str
 
--- | Kana/kanji to romaji function
-romaji :: Text -> Mind s Text
-romaji str = do
-    m <- gtranslate "ja" "en" $ Text.unpack str
-    let mtrans = (map $ maybeToMonoid . flip atMay 3) . fst <$> m
-    return . Text.unwords $ maybe [] id mtrans
-
 -- | Reverse word order.
 rwords :: Text -> Mind s Text
 rwords = return . Text.unwords . reverse . Text.words
@@ -1425,7 +1519,7 @@ translate str = do
         (tl, string) = if Text.length tl' == 2 && Text.all isLower tl'
                        then (Text.unpack tl', Text.unpack str')
                        else ("en", Text.unpack str)
-    !m <- gtranslate "auto" tl string
+    !m <- googleTranslate "auto" tl string
     let mtrans = (map $ maybeToMonoid . headMay) . fst <$> m
     return . Text.concat $ maybe [] id mtrans
 
@@ -1433,9 +1527,11 @@ translate str = do
 urbandict :: Text -> Mind s Text
 urbandict str = do
     let burl = "http://api.urbandictionary.com/v0/define?term="
-    jsonStr <- httpGetString (burl ++ Text.unpack str)
-    let jsonLBS = BL.fromStrict $ BU.fromString jsonStr
-    let mjson :: Maybe Aes.Value
+
+    request <- try $ Wreq.getWith wreqOpts $ burl ++ Text.unpack str
+
+    let jsonLBS = request ^. _Right . Wreq.responseBody
+        mjson :: Maybe Aes.Value
         mjson = Aes.decode jsonLBS
         mdefinition = mjson ^? _Just
                              . Aes.key "list"
