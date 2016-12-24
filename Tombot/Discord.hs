@@ -35,13 +35,14 @@ import Control.Monad.Reader
 import Control.Type.Operator
 
 import Data.Aeson as Aes
+import qualified Data.Aeson.Lens as Aes
 import Data.Aeson.Types (Options(..))
 import Data.Char (toLower, toUpper)
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Default
 import Data.IORef
-import Data.List (isPrefixOf)
+import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, listToMaybe)
@@ -60,6 +61,7 @@ import Network.WebSockets
 import Network.Wreq hiding (get)
 import Network.Wreq.Types
 
+import System.FilePath ((</>))
 import System.IO (stdin)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Random (randomRIO)
@@ -246,13 +248,6 @@ instance FromJSON PresenceUpdate where
 
 -- }}}
 
-
-appId = "181425182257315840"
-appSecret = "P0sOHDhBgcDnRv6uy9PQ8h7nEmWi_d0K"
-
-botId = "181494632721547266"
-botToken = "MTgxNDk0NjMyNzIxNTQ3MjY2.ChpljA.WmukAGg2GV9Q8csv5rbgAARtZ5w"
-
 apiURL :: String
 apiURL = "https://discordapp.com/api"
 gatewayURL = apiURL ++ "/gateway"
@@ -262,10 +257,10 @@ wsURL = "gateway.discord.gg"
 
 userAgent = "DiscordBot (https://github.com/Shou, v1.0)"
 
-opts = defaults
-     & header "User-Agent" .~ [userAgent]
-     & header "Authorization" .~ ["Bot " <> fromString botToken]
-     & header "Content-Type" .~ ["application/json"]
+opts botToken = defaults
+              & header "User-Agent" .~ [userAgent]
+              & header "Authorization" .~ ["Bot " <> fromString botToken]
+              & header "Content-Type" .~ ["application/json"]
 
 props = Map.fromList [ ("$os", "linux")
                      , ("$browser", "Tombot")
@@ -274,6 +269,10 @@ props = Map.fromList [ ("$os", "linux")
                      , ("$referring_domain", "")
                      ]
 
+
+stateToken :: TMVar String
+{-# NOINLINE stateToken #-}
+stateToken = unsafePerformIO newEmptyTMVarIO
 
 {-# NOINLINE stateSeq #-}
 stateSeq = unsafePerformIO $ newTMVarIO 0
@@ -285,9 +284,19 @@ stateConfigt = unsafePerformIO newEmptyTMVarIO
 {-# NOINLINE recvTChan #-}
 recvTChan = unsafePerformIO newTChanIO
 
-stateUsers :: TVar $ Map (CI Text) (Tombot.User IRC.IRC)
+stateUsers :: TVar $ Map Text (Tombot.User IRC.IRC)
 {-# NOINLINE stateUsers #-}
 stateUsers = unsafePerformIO $ newTVarIO mempty
+
+-- | Holding associated server id and channel name
+stateChannelMetadata :: TVar $ Map Text (Text, Text)
+{-# NOINLINE stateChannelMetadata #-}
+stateChannelMetadata = unsafePerformIO $ newTVarIO Map.empty
+
+getChannelMeta cid = do
+    meta <- atomically $ Map.lookup cid <$> readTVar stateChannelMetadata
+
+    return $ maybe (mempty, mempty) id meta
 
 
 trySome :: IO a -> IO $ Either SomeException a
@@ -299,8 +308,11 @@ sendJSON obj conn = do
     sendTextData conn json
 
 sendHTTP path obj = do
-    r <- postWith opts (apiURL ++ path) obj
+    token <- atomically $ readTMVar stateToken
+    r <- postWith (opts token) (apiURL ++ path) obj
+
     let responseText = r ^. responseBody
+
     print responseText
 
 identify :: ToJSON a => a -> Connection -> IO ()
@@ -322,19 +334,31 @@ onReady conn dsptch@(Dispatch op d s t) = do
 onGuildCreate :: Connection -> Dispatch GuildCreate -> IO ()
 onGuildCreate conn dsptch@(Dispatch op d s t) = do
     print $ dsptch { dispatchD = () }
+
+    let serverId = guildcId d
+        channels :: Aes.Array
+        channels = guildcChannels d ^. Aes._Array
+        channelIds = channels ^.. traverse . Aes.key "id" . Aes._String
+        channelNames = channels ^.. traverse . Aes.key "name" . Aes._String
+        channelTuples = zip channelIds channelNames
+        inserter m (cid, cname) = Map.insert cid (serverId, cname) m
+        channelMap = foldl' inserter Map.empty channelTuples
+
+    atomically $ modifyTVar' stateChannelMetadata (channelMap <>)
+
     let members = guildcMembers d
-        gid = CI.mk $ guildcId d
         users = Map.unions $ flip map members $ \mem ->
             let !user = memberUser mem
-                !mid = CI.mk $ userId user
+                !mid = userId user
             in Map.singleton mid $
                    Tombot.User { Tombot._userNick = userUsername user
                                , Tombot._userName = userUsername user
-                               , Tombot._userId = CI.mk $ userId user
+                               , Tombot._userId = mid
                                , Tombot._userService = (def @(Tombot.UserService IRC.IRC))
                                , Tombot._userStatus = Tombot.Online
                                , Tombot._userChannels = mempty
                                }
+
     atomically $ modifyTVar' stateUsers $ Map.union users
     print $ flip map members $ userUsername . memberUser
 
@@ -348,9 +372,15 @@ onMessage conn dsptch@(Dispatch op d s t) = do
     users <- atomically $ readTVar stateUsers
     config <- atomically $ readTVar =<< readTMVar stateConfigt
     tid <- myThreadId
-    let chanText = fromString $ messagecChannel_id d
-        chan :: Tombot.Channel IRC.IRC
-        chan = Tombot.Channel { Tombot._chanName = CI.mk chanText
+
+    let chanName = fromString $ messagecChannel_id d
+        ciChanName = CI.mk chanName
+
+    meta <- getChannelMeta chanName
+
+    let chan :: Tombot.Channel IRC.IRC
+        chan = Tombot.Channel { Tombot._chanName = CI.mk $ view _2 meta
+                              , Tombot._chanId = chanName
                               , Tombot._chanTopic = ""
                               , Tombot._chanJoin = True
                               , Tombot._chanAutoJoin = True
@@ -358,32 +388,36 @@ onMessage conn dsptch@(Dispatch op d s t) = do
                               , Tombot._chanFuncs = Tombot.funcs
                               , Tombot._chanService = def
                               }
-        cichan = CI.mk chanText
-        chans = [ (cichan, chan) ]
+
+        chans = [ (chanName, chan) ]
         -- XXX idiot???
         nick = maybe "idiot" id . Map.lookup "username" $ messagecAuthor d
-        user = Tombot.User nick "" "" (Set.singleton cichan) Tombot.Online def
+        uid = maybe "" id . Map.lookup "id" $ messagecAuthor d
+        user = Tombot.User nick "" uid (Set.singleton ciChanName) Tombot.Online def
         users' = flip Map.map users
-               $ Lens.over Tombot.userChannels $ Set.insert cichan
+               $ Lens.over Tombot.userChannels $ Set.insert ciChanName
+
         bot = Tombot.Bot { Tombot._botNick = "Tombot"
                          , Tombot._botName = "Tombot"
                          , Tombot._botId = ""
                          , Tombot._botService = def
                          }
-        server = Tombot.Server { Tombot._servHost = "discordapp.com"
-                               , Tombot._servPort = 443
+
+        server = Tombot.Server { Tombot._servId = view _1 meta
                                , Tombot._servChannels = chans
                                , Tombot._servBot = bot
                                , Tombot._servStatus = Tombot.Connected
                                , Tombot._servUsers = users'
                                , Tombot._servService = def
                                }
+
         current = Tombot.Current { Tombot._currUser = user
                                  , Tombot._currServer = server
                                  , Tombot._currDestination = Right chan
                                  , Tombot._currConfig = config
                                  }
-        privmsg = IRC.Privmsg nick "" "" chanText $ messagecContent d
+
+        privmsg = IRC.Privmsg nick "" "" chanName $ messagecContent d
 
     s <- newTVarIO current
 
@@ -392,7 +426,6 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         void . Tombot.forkMi $ IRC.onMatch send privmsg
         void . Tombot.forkMi $ IRC.runLang send privmsg
         IRC.logPriv privmsg
-
   where
     send chan msg = when (not $ T.null msg) $ do
         let msgObj = Map.singleton "content" msg :: Map Text Text
@@ -407,7 +440,11 @@ onTypingStart conn dsptch = do
     print dsptch
 
 websockIdentify conn = do
-    identify (Identify (fromString botToken) props False 50 [0, 1]) conn
+    token <- atomically $ readTMVar stateToken
+
+    print token
+
+    identify (Identify (fromString token) props False 50 [0, 1]) conn
 
     websockLoop conn
 
@@ -448,8 +485,25 @@ websockInit = do
 runDiscord :: TVar Tombot.Config -> IO ()
 runDiscord configt = do
     setLocaleEncoding utf8
-    atomically $ putTMVar stateConfigt configt
-    websockInit `Except.onException` websockInit -- XXX looks dangerous
+
+    config <- atomically $ do
+        putTMVar stateConfigt configt
+        readTVar configt
+
+    let apiPath = Tombot._confDirectory config </> "api"
+
+    apiKeys <- Tombot.readConfig @_ @(Map Text String) apiPath
+
+    let mayToken = join $ Map.lookup "discord-token" <$> apiKeys
+
+    case mayToken of
+      Just token -> do
+        atomically $ putTMVar stateToken token
+        -- XXX looks dangerous
+        websockInit `Except.onException` websockInit
+
+      Nothing -> putStrLn $ "No Discord token in " <> apiPath
+
 
     --r <- getWith opts gatewayURL
     --let responseText = r ^. responseBody

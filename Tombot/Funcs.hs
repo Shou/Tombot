@@ -47,6 +47,8 @@ import Data.Char (toLower, isLower, isAlphaNum)
 import Data.Coerce
 import Data.IORef
 import Data.List
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as Hash
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe
@@ -98,6 +100,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("kick", kick, Mod)
                 , ("voice", voice, Mod)
                 , ("currency", exchange, Online)
+                , ("cryptocoin", cryptocoin, Online)
                 , ("find", findMsg, Online)
                 , ("food", food, Online)
                 , ("lastfm", lastfm, Online)
@@ -131,6 +134,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("name", name, Online)
                 , ("nyaa", nyaa, Online)
                 , ("nick", nick, Online)
+                , ("film", omdb, Online)
                 , ("quit", quit, Admin)
                 , ("stat", stat, Online)
                 , ("tell", tell, Online)
@@ -478,7 +482,8 @@ bots _ = return "Hi! (λ Haskell)"
 -- | Set the channel's ChanAutoJoin value
 cajoin :: Text -> Mind s Text
 cajoin str = do
-    dest <- either _userId _chanName <$> sees _currDestination
+    dest <- either _userId _chanId <$> sees _currDestination
+
     if Text.null $ Text.strip str
     then do
         mchan <- Map.lookup dest . _servChannels . _currServer <$> see
@@ -495,7 +500,7 @@ chanjoin str = mvoid . write "IRC" $ "JOIN " <> str
 -- | Set the channel's ChanJoin value
 cjoin :: Text -> Mind s Text
 cjoin str = do
-    dest <- either _userId _chanName <$> sees _currDestination
+    dest <- either _userId _chanId <$> sees _currDestination
     if Text.null $ Text.strip str
     then do
         mchan <- Map.lookup dest . _servChannels . _currServer <$> see
@@ -579,7 +584,7 @@ withLocalValue :: Monoid a
                -> (a -> Mind s b)
                -> Mind s $ Map Text $ Map (CI Text) b
 withLocalValue m f = do
-    serv <- sees $ _servHost . _currServer
+    serv <- sees $ _servId . _currServer
     dest <- sees $ either _userId _chanName . _currDestination
 
     -- Get the value
@@ -654,13 +659,89 @@ event str = return "" {-do
             $ join $ readMay . Text.unpack <$> atMay args 1
     eventFunc = Text.unwords $ drop 2 args
 
-exchangeRateCache = unsafePerformIO $ newEmptyTMVarIO
+exchangeRateCache :: TMVar (POSIXTime, Maybe Aes.Value)
+exchangeRateCache = unsafePerformIO newEmptyTMVarIO
 
--- FIXME doesn't work
--- XXX use http://fixer.io/
 -- | Currency exchange function.
 exchange :: Text -> Mind s Text
-exchange str = return ""
+exchange str = do
+    let url = "https://api.fixer.io/latest?base=" <> Text.unpack base
+
+    cachedRequest <- liftIO . atomically $ tryReadTMVar exchangeRateCache
+    currentTime <- liftIO getPOSIXTime
+
+    cacheRates <- if maybe False ((currentTime >=) . fst) cachedRequest
+                     && maybe False (const True) (join $ snd <$> cachedRequest)
+    then return $ cachedRequest ^? _Just . Lens.to snd . _Just
+    else do
+        request <- try $ Wreq.getWith wreqOpts url
+
+        let rates = request ^? _Right
+                             . Wreq.responseBody
+                             . Lens.to (Aes.decode @Aes.Value)
+                             . _Just
+                             . Aes.key "rates"
+
+        liftIO $ atomically $ do
+            let cacheValue = (currentTime + 3600*24, rates)
+
+            isEmpty <- isEmptyTMVar exchangeRateCache
+
+            if isEmpty
+            then putTMVar exchangeRateCache cacheValue
+            else void $ swapTMVar exchangeRateCache cacheValue
+
+        return rates
+
+    let currency = cacheRates ^? _Just
+                               . Aes.key target
+                               . Aes._Double
+
+        rate = maybe (1/0) id currency
+
+    return $ Text.pack (show $ amount * rate) <> " " <> target
+  where
+    args = Text.words str
+    amount :: Double
+    amount = maybe 10 id $ join $ readMay . Text.unpack <$> headMay args
+    base = maybe "USD" id $ atMay args 1
+    target = base >&> maybe "USD" id (atMay args 2) <|< base
+
+cryptocoin :: Text -> Mind s Text
+cryptocoin str = do
+    let url = "https://api.coinmarketcap.com/v1/ticker/"
+
+    request <- try $ Wreq.getWith wreqOpts url
+
+    let coins :: [HashMap Text Aes.Value]
+        coins = request ^.. _Right
+                          . Wreq.responseBody
+                          . Lens.to (Aes.decode @Aes.Value)
+                          . _Just
+                          . Aes._Array
+                          . traverse
+                          . Aes._Object
+
+        p :: HashMap Text Aes.Value -> Bool
+        p c = any (\k -> maybe False (ciEq str) $ c ^? at k . _Just . Aes._String)
+                  ["id", "name", "symbol"]
+
+        mcoin = listToMaybe $ filter p coins
+
+        format c = andMconcat
+                 [ Hash.lookup "name" c ^. _Just . Aes._String
+                 , " ("
+                 , Hash.lookup "symbol" c ^. _Just . Aes._String
+                 , "): $"
+                 , Hash.lookup "price_usd" c ^. _Just . Aes._String
+                 , " ("
+                 , Hash.lookup "percent_change_7d" c ^. _Just . Aes._String
+                 , "% last 7 days)"
+                 ]
+
+    liftIO $ print mcoin
+
+    return $ maybe "" format mcoin
 
 -- | Alias for `history' and only returning the message.
 findMsg :: Text -> Mind s Text
@@ -768,14 +849,34 @@ count str = return $ Text.pack . show $ Text.length str
 -- XXX move JSON parsing to `json' function once that is finished
 -- | Last.fm user get recent track
 lastfm :: Text -> Mind s Text
-lastfm str = return ""
+lastfm str = do
+    apiKey <- maybe "" id <$> getAPIKey "lastfm"
+
+    let url = andMconcat
+            [ "http://ws.audioscrobbler.com/2.0/"
+            , "?method=user.getrecenttracks&api_key=", apiKey
+            , "&format=json&user=", urlEncode user
+            , "&limit=1&extended=1"
+            ]
+
+    request <- try $ Wreq.getWith wreqOpts url
+
+    let user = request ^? _Right
+                        . Wreq.responseBody
+                        . Lens.to (Aes.decode @Aes.Value)
+                        . _Just
+
+    return ""
+  where
+    args = Text.words str
+    user = maybe "" Text.unpack $ atMay args 0
 
 -- TODO FIXME changing does not work
 -- | List the available Funcs.
 funcsList :: Text -> Mind s Text
 funcsList str = do
     edest <- sees _currDestination
-    let dest = either _userId _chanName edest
+    let dest = either _userId _chanId edest
     if Text.null $ Text.strip str
     then do
         let ea = fmap _chanFuncs edest
@@ -818,7 +919,7 @@ help str = do
     edest <- sees _currDestination
 
     let msfuncs = Map.unions . Map.elems <$> mschans
-        dest = either _userId _chanName edest
+        dest = either _userId _chanId edest
         mlfuncs = join $ Map.lookup dest <$> mschans
         mlsfuncs = Map.union <$> mlfuncs <*> msfuncs
 
@@ -846,7 +947,7 @@ history str = do
 
     edest <- sees _currDestination
 
-    let dest = either _userId _chanName edest
+    let dest = either _userId _chanId edest
 
     (rts :: [(Text, Text, Text, Text, Maybe Text)]) <- queryLogs
 
@@ -857,7 +958,7 @@ history str = do
                     else all (`Text.isInfixOf` t) matches
             guard $ if null filters' then True
                     else not $ any (`Text.isInfixOf` t) filters'
-            guard $ CI.original dest == chnl
+            guard $ dest == chnl
 
             return t
 
@@ -904,10 +1005,10 @@ markov str = do
     -- Random starting chain
     n2 <- liftIO $ randomRIO (0, Map.size chains2 - 1)
     -- String chains to use, i.e. total length of words * s?
-    rlen <- liftIO $ randomRIO (10, 100)
+    rlen <- liftIO $ randomRIO (100, 1000)
 
     let initPart :: Vector Idiom
-        initPart = maybe (fst $ Map.elemAt n chains2)
+        initPart = maybe (fst $ Map.elemAt n2 chains2)
                          (const idiomArgs)
                          (Map.lookup idiomArgs chains2)
 
@@ -1001,7 +1102,7 @@ predict str = do
 
         lvmws :: [Vector $ Map Idiom Int]
         lvmws = do
-            Just mws <- map (getIdiomSuccessors . mkIdiom) $ Text.words str
+            Just mws <- map (getIdiomSuccessors . mkIdiom) args
             return mws
 
         mergeWith :: Monoid a
@@ -1063,7 +1164,7 @@ predict str = do
     -- XXX words length is inaccurate
     len <- liftIO $ randomRIO (1, 100)
     let is = [length lvmws .. length lvmws + len]
-    prediction <- scanM step (fmap mkIdiom . lastMay $ Text.words str, merged) is
+    prediction <- scanM step (fmap mkIdiom $ lastMay args, merged) is
 
     let lastMerged = maybe merged id $ snd <$> lastMay prediction
         predWords = tailSafe . catMaybes $ map (fmap origIdiom . fst) prediction
@@ -1072,9 +1173,14 @@ predict str = do
         putStr "DONE PREDICTING "
         print =<< fmap (flip (-) stime) getPOSIXTime
 
-    return $ Text.unwords predWords
+    return $ mconcat
+           [ maybe "" id (lastMay args)
+           , " "
+           , Text.unwords predWords
+           ]
 
   where
+    args = Text.words str
     randomIndexMay probs = do
         let uniProbs = join $ map (uncurry replicate) $ zip probs [0..]
         n <- liftIO $ randomRIO (0, length uniProbs - 1)
@@ -1196,7 +1302,7 @@ nick :: Text -> Mind s Text
 nick _ = sees $ _userNick . _currUser
 
 userId :: Text -> Mind s Text
-userId _ = sees $ CI.original . _userId . _currUser
+userId _ = sees $ _userId . _currUser
 
 -- TODO
 -- XXX on erroneous NICK, remove it from the list
@@ -1209,6 +1315,45 @@ nicks str = if Text.null $ Text.strip str
 -- | List the bot's available operators.
 ops :: Text -> Mind s Text
 ops _ = return "++ -> <- <> >< >> +> == /= => />"
+
+-- | Search the Open Movie Database
+omdb :: Text -> Mind s Text
+omdb str = do
+    let url = mconcat [ "https://omdbapi.com/?t=", title 
+                      , "&y=", year
+                      , "&plot=short&tomatoes=true&r=json"
+                      ]
+
+    request <- try $ Wreq.getWith wreqOpts url
+
+    let movie = request ^. _Right
+                         . Wreq.responseBody
+                         . Lens.to (Aes.decode @Aes.Value)
+                         . _Just
+                         . Aes._Object
+
+        format m = andMconcat
+                 [ Hash.lookup "Title" m ^. _Just . Aes._String
+                 , " ("
+                 , Hash.lookup "Released" m ^. _Just . Aes._String
+                 , ", "
+                 , Hash.lookup "Runtime" m ^. _Just . Aes._String
+                 , ", "
+                 , Hash.lookup "tomatoMeter" m ^. _Just . Aes._String
+                 , "🍅): "
+                 , Hash.lookup "Plot" m ^. _Just . Aes._String
+                 , " "
+                 , Hash.lookup "Poster" m ^. _Just . Aes._String
+                 ]
+
+    return $ format movie
+  where
+    args = Text.words str
+    year = maybe "" show
+         $ join $ (readMay @Int . Text.unpack) <$> lastMay args
+
+    title = Text.unpack
+          $ Text.pack year >&> Text.unwords (init args) <|< str
 
 -- | Part from a channel.
 partchan :: Text -> Mind s Text
@@ -1223,7 +1368,7 @@ partchan str
 -- | Set the channel's prefix `Char's
 prefix :: Text -> Mind s Text
 prefix str = do
-    dest <- either _userId _chanName <$> sees _currDestination
+    dest <- either _userId _chanId <$> sees _currDestination
     if Text.null $ Text.strip str
     then do
         mchan <- Map.lookup dest . _servChannels . _currServer <$> see
@@ -1234,7 +1379,7 @@ prefix str = do
 -- | Send a private message to the user.
 priv :: Text -> Mind s Text
 priv str = do
-    nick <- sees $ CI.original . _userId . _currUser
+    nick <- sees $ _userId . _currUser
     mvoid $ putPrivmsg nick str
 
 -- | Disconnect from an IRC server.
@@ -1389,13 +1534,15 @@ sed str = mwhen (Text.length str > 1) $ do
 stat :: Text -> Mind s Text
 stat str = do
     let mv = readMay $ Text.unpack value :: Maybe UserStatus
+
     if Text.null $ Text.strip value
     then do
         users <- sees $ _servUsers . _currServer
         return $ maybe "" (Text.pack . show . _userStatus) $ Map.lookup nick users
+
     else do
         mwhenUserStat (>= Admin) $ do
-            servhost <- _servHost <$> sees _currServer
+            servhost <- _servId <$> sees _currServer
             dir <- _confDirectory <$> seeConfig
             mservs <- readConfig $ dir </> "UserStats"
             let f = maybe (Just . Map.delete nick) ((Just .) . Map.insert nick) mv
@@ -1405,7 +1552,7 @@ stat str = do
             e <- modUser nick $ over userStatus (\s -> maybe s id mv)
             return $ either id (const "") e
   where
-    (nick, value) = first CI.mk $ bisect (== ' ') str
+    (nick, value) = bisect (== ' ') str
 
 -- | Delay a function by n seconds where n is a floating point number.
 sleep :: Text -> Mind s Text
@@ -1437,7 +1584,7 @@ store str = do
 -- | Store a message for a user that is printed when they talk next.
 tell :: Text -> Mind s Text
 tell str = do
-    serv <- sees $ _servHost . _currServer
+    serv <- sees $ _servId . _currServer
     edest <- sees $ _currDestination
     cnick <- sees $ _userNick . _currUser
     if Text.null $ Text.strip msg'

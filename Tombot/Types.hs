@@ -123,7 +123,7 @@ data User s = User { _userNick :: !Text
                    -- ^ Nickname
                    , _userName :: !Text
                    -- ^ Full name
-                   , _userId :: CI Text
+                   , _userId :: !Text
                    -- ^ Account ID
                    , _userChannels :: Set (CI Text)
                    -- ^ Channel names
@@ -146,6 +146,7 @@ data Bot s = Bot { _botNick :: Text
 -- XXX what else should a `Channel' hold?
 -- NOTE rejoin on kick with `chanJoin = True`; don't join at all if `False`.
 data Channel s = Channel { _chanName :: CI Text
+                         , _chanId :: Text
                          , _chanJoin :: !Bool
                          , _chanAutoJoin :: !Bool
                          , _chanTopic :: !Text
@@ -155,7 +156,7 @@ data Channel s = Channel { _chanName :: CI Text
                          }
 
 instance Default (Channel ()) where
-    def = Channel "" False False "" [':'] mempty ()
+    def = Channel "" "" False False "" [':'] mempty ()
 
 -- TODO move this to Utils
 fromAllowed :: Allowed a -> a
@@ -178,15 +179,10 @@ data ServerStatus = Connected
                   | Disconnected
                   deriving (Show, Eq)
 
--- TODO servBotNicks
--- XXX we can generate a random string and append it to the nick, then if there
---     is a NickServId we will attempt to ghost. Basically generate a random
---     string every time the current nick is in use.
-data Server s = Server { _servHost :: !Text
-                       , _servPort :: !Integer
-                       , _servChannels :: Map (CI Text) (Channel s)
+data Server s = Server { _servId :: !Text
+                       , _servChannels :: Map Text (Channel s)
                        , _servStatus :: ServerStatus
-                       , _servUsers :: Map (CI Text) (User s)
+                       , _servUsers :: Map Text (User s)
                        , _servBot :: Bot s
                        , _servService :: ServerService s
                        }
@@ -247,7 +243,7 @@ type Decide s e = ExceptT e $ Mind s
 type Funky s = StateT StFunk (Mind s)
 
 type Modes = Map Text Mode
-type Users s = Map Nick (User s)
+type Users s = Map Text (User s)
 
 instance SQL.ToField Nick where
     toField = SQL.toField . CI.original

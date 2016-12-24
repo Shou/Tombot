@@ -46,6 +46,7 @@ Executable tombot
         text,
         time,
         type-operators,
+        unordered-containers,
         utf8-string,
         vector,
         websockets,

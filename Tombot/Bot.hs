@@ -41,8 +41,8 @@ initialise :: TVar Config -> Server IRC.IRC -> IO ()
 initialise configt server = do
     config <- atomically $ readTVar configt
 
-    let host = Text.unpack $ _servHost server
-        port = fromIntegral $ _servPort server
+    let host = Text.unpack $ _servId server
+        port = fromIntegral $ IRC._servPort $ _servService server
         -- TODO FIXME XXX
         nick = "Tombot"
         name = "Tombot"
@@ -91,7 +91,7 @@ respond line = do
         onPart irc $ \_ -> do
             adaptPart irc
         onTopic irc $ \(IRC.Topic nick name host c t) -> do
-            void $ modChanTopic (CI.mk c) $ const t
+            void $ modChanTopic c $ const t
         onPing irc $ \(IRC.Ping t) -> write "IRC" $ "PONG :" <> t
         onPrivmsg irc $ \_ -> do
             adaptPriv irc

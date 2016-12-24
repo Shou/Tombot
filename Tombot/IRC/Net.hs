@@ -11,6 +11,8 @@ module Tombot.IRC.Net where
 -- {{{ Imports
 import Tombot.Utils
 import Tombot.Types
+import Tombot.IRC.Types (IRC)
+import qualified Tombot.IRC.Types as IRC
 
 import Control.Applicative
 import Control.Concurrent
@@ -68,18 +70,18 @@ connecter host port nick name = liftIO $ connecter' 0
     onerror n e = erro e >> connecter' (inctime n)
 
 -- | Mind IRC server connector.
-connect :: Mind s ()
+connect :: Mind IRC ()
 connect = do
     server <- sees _currServer
 
-    let host = _servHost server
-        port = _servPort server
+    let host = _servId server
+        port = IRC._servPort $ _servService server
         nick = _botNick $ _servBot server
         name = _botName $ _servBot server
 
     verb $ "Connecting to " <> host
 
-    h <- connecter (T.unpack host) (fromInteger port) nick name
+    h <- connecter (T.unpack host) (fromIntegral port) nick name
 
     liftIO . atomically $ do
         b <- isEmptyTMVar handleVar
@@ -89,7 +91,7 @@ connect = do
     sets $ Lens.over currServer $ Lens.set servStatus Connected
 
 -- | Reconnect to the IRC network server.
-reconnect :: Mind s ()
+reconnect :: Mind IRC ()
 reconnect = do
     h <- liftIO . atomically $ readTMVar handleVar
     liftIO $ hClose h

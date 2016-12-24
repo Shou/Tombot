@@ -124,23 +124,22 @@ greet (Join nick name host chan) = void . forkMi $ do
 -- |
 adaptJoin :: IrcAST -> Mind IRC ()
 adaptJoin (Join nick name host chan) = do
-    host <- sees $ _servHost . _currServer
+    host <- sees $ _servId . _currServer
     dir <- _confDirectory <$> seeConfig
     musers <- join . fmap (Map.lookup host) <$> readConfig (dir <> "UserStats")
 
     let muser = join $ Map.lookup nick <$> musers
         stat = maybe Online id muser
-        cinick = CI.mk nick
 
-    adaptWith chan nick cinick name host $ Map.insert cinick . (userStatus .~ stat)
+    adaptWith chan nick nick name host $ Map.insert nick . (userStatus .~ stat)
 
 -- | Add a channel if it doesn't exist.
 addJoin :: IrcAST -> Mind IRC ()
 addJoin (Join nick name host chan) = do
     chans <- sees $ _servChannels . _currServer
     let cichan = CI.mk chan
-    unless (Map.member cichan chans) $ do
-        let chans' = Map.insert cichan (def & Lens.set chanName cichan) chans
+    unless (Map.member chan chans) $ do
+        let chans' = Map.insert chan (def & Lens.set chanName cichan) chans
         Tom.sets $ over currServer $ Lens.set servChannels chans'
 
 -- }}}
@@ -152,9 +151,8 @@ addJoin (Join nick name host chan) = do
 -- | Adapt the current from the Kick information.
 adaptKick :: IrcAST -> Mind IRC ()
 adaptKick (Kick nick name host chan nicks text) = do
-    let cinicks = CI.mk nicks
-    adaptWith chan nicks cinicks "" "" $
-        Map.insert cinicks . over userChannels (Set.delete $ CI.mk chan)
+    adaptWith chan nicks nicks "" "" $
+        Map.insert nicks . over userChannels (Set.delete $ CI.mk chan)
 
 -- | When the bot is kicked, rejoin if `chanAutoJoin' is `True'.
 botKick :: IrcAST -> Mind IRC ()
@@ -176,8 +174,7 @@ botKick (Kick nick name host chans nicks text) = do
 -- |
 adaptMode :: IrcAST -> Mind IRC ()
 adaptMode (Mode nick name host chan _ _) = do
-    let cinick = CI.mk nick
-    adaptWith chan nick cinick name host $ Map.insert cinick
+    adaptWith chan nick nick name host $ Map.insert nick
 
 -- TODO move `minus' and `plus' to Utils.
 -- |
@@ -186,14 +183,16 @@ changeMode (Mode nick name host chan chars mtext) =
     mode chars $ maybe [] T.words mtext
   where
     usermodes = "vhoaq" :: String
+    mode :: [Char] -> [Text] -> Mind IRC ()
     mode ('+':xs) ys = plus xs ys
     mode ('-':xs) ys = minus xs ys
     mode _ _ = return ()
+    plus :: [Char] -> [Text] -> Mind IRC ()
     plus [] _ = return ()
     plus ('-':xs) ys = minus xs ys
     plus (x:xs) ys
         | any (== x) usermodes && length ys > 0 = do
-            e <- modUser (CI.mk $ ys !! 0) $ \u ->
+            e <- modUser (ys !! 0) $ \u ->
                 let chans = _userChannels u
                     -- TODO FIXME
                     f = maybe (Just [x]) (Just . sort . (x :))
@@ -203,15 +202,16 @@ changeMode (Mode nick name host chan chars mtext) =
             plus xs $ tail ys
         | not $ any (== x) usermodes = do
             -- TODO
-            e <- modChan (CI.mk chan) $ id --over chanMode (x:)
+            e <- modChan chan $ id --over chanMode (x:)
             either warn return e
             plus xs $ tailSafe ys
         | otherwise = warn "Missing MODE argument"
+    minus :: [Char] -> [Text] -> Mind IRC ()
     minus [] _ = return ()
     minus ('+':xs) ys = plus xs ys
     minus (x:xs) ys
         | any (== x) usermodes && length ys > 0 = do
-            e <- modUser (CI.mk $ ys !! 0) $ \u ->
+            e <- modUser (ys !! 0) $ \u ->
                 let chans = _userChannels u
                     -- TODO FIXME
                     f = maybe (Just []) (Just . filter (/= x))
@@ -221,7 +221,7 @@ changeMode (Mode nick name host chan chars mtext) =
             minus xs $ tail ys
         | not $ any (== x) usermodes  = do
             -- TODO FIXME
-            e <- modChan (CI.mk chan) $ id -- over chanMode $ filter (/= x)
+            e <- modChan chan $ id -- over chanMode $ filter (/= x)
             either warn return e
             minus xs $ tailSafe ys
         | otherwise = warn "Missing MODE argument"
@@ -232,10 +232,8 @@ changeMode (Mode nick name host chan chars mtext) =
 
 nickUserlist :: IrcAST -> Mind IRC ()
 nickUserlist (Nick nick name host text) = do
-    let citext = CI.mk text
-        cinick = CI.mk nick
-    adaptWith "" nick citext name host $ \u ->
-        Map.insert citext (Lens.set userNick text u) . Map.delete cinick
+    adaptWith "" nick text name host $ \u ->
+        Map.insert text (Lens.set userNick text u) . Map.delete nick
 
 -- }}}
 
@@ -244,10 +242,9 @@ nickUserlist (Nick nick name host text) = do
 -- |
 adaptPart :: IrcAST -> Mind IRC ()
 adaptPart (Part nick name host chan _) = do
-    let cinick = CI.mk nick
-        cichan = CI.mk chan
-    adaptWith chan nick cinick name host $
-        Map.insert cinick . over userChannels (Set.delete cichan)
+    let cichan = CI.mk chan
+    adaptWith chan nick nick name host $
+        Map.insert nick . over userChannels (Set.delete cichan)
 
 -- }}}
 
@@ -256,8 +253,7 @@ adaptPart (Part nick name host chan _) = do
 -- |
 adaptPriv :: IrcAST -> Mind IRC ()
 adaptPriv (Privmsg nick name host d _) = do
-    let cinick = CI.mk nick
-    adaptWith d nick cinick name host $ Map.insert cinick
+    adaptWith d nick nick name host $ Map.insert nick
 
 -- | Respond to CTCP VERSION.
 ctcpVersion :: IrcAST -> Mind IRC ()
@@ -342,9 +338,7 @@ logPriv (Privmsg nick name host dest text) = do
 -- {{{ Quit
 
 quitUserlist (Quit nick name host text) = do
-    let cinick = CI.mk nick
-
-    adaptWith "" nick cinick name host $ Map.insert cinick . Lens.set userStatus Offline
+    adaptWith "" nick nick name host $ Map.insert nick . Lens.set userStatus Offline
 
 -- }}}
 
@@ -356,10 +350,9 @@ addTopic (Topic nick name host chan text) = do
     server <- sees _currServer
 
     let cs = _servChannels server
-        cichan = CI.mk chan
-        mc = Map.lookup cichan cs ^? _Just . to (Lens.set chanTopic text)
+        mc = Map.lookup chan cs ^? _Just . to (Lens.set chanTopic text)
         ec = note ("No channel: " <> chan) mc
-        cs' = either (const $ cs) (flip (Map.insert cichan) cs) ec
+        cs' = either (const $ cs) (flip (Map.insert chan) cs) ec
 
     Tom.sets $ over currServer $ Lens.set servChannels cs'
 
@@ -370,8 +363,7 @@ addTopic (Topic nick name host chan text) = do
 -- | Adapt the current from the Invite information.
 adaptInv :: IrcAST -> Mind IRC ()
 adaptInv (Invite nick name host dest chan) = do
-    let cinick = CI.mk nick
-    adaptWith chan nick cinick name host $ Map.insert cinick
+    adaptWith chan nick nick name host $ Map.insert nick
 
 -- | Join on invite.
 joinInv :: IrcAST -> Mind IRC ()
@@ -379,7 +371,7 @@ joinInv (Invite nick name host dest chan) = unlessBanned $ do
     edest <- sees _currDestination
     let e = flip fmap edest $ \c -> do
         mwhen (_chanJoin c) $ write "IRC" $ "JOIN " <> chan
-    either (warn . noChan . CI.original . _userId) id e
+    either (warn . noChan . _userId) id e
   where
     noChan :: Text -> Text
     noChan = ("Not a channel, " <>)
@@ -391,7 +383,7 @@ joinInv (Invite nick name host dest chan) = unlessBanned $ do
 -- |
 adaptNum :: IrcAST -> Mind IRC ()
 adaptNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
-    mchan <- Map.lookup (CI.mk a) <$> sees (_servChannels . _currServer)
+    mchan <- Map.lookup a <$> sees (_servChannels . _currServer)
 
     let user = Left def
         dest = maybe user Right mchan
@@ -405,7 +397,7 @@ adaptNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
 --   nick.
 cycleNick :: IrcAST -> Mind IRC ()
 cycleNick (Numeric n ma t) = warnDecide $ do
-    server <- lift $ sees $ _servHost . _currServer
+    server <- lift $ sees $ _servId . _currServer
     cnick <- lift $ sees $ _botNick . _servBot . _currServer
     -- TODO Nickserv
     mnspw <- lift $ sees $ const Nothing
@@ -441,11 +433,11 @@ welcomeNum _ = do
 whoisNum :: IrcAST -> Mind IRC ()
 whoisNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     let xs = T.words a
-        cinick = CI.mk $ atDef "" xs 0
+        nick = atDef "" xs 0
         name = atDef "" xs 1
         host = atDef "" xs 2
 
-    e <- modUser cinick $ \u ->
+    e <- modUser nick $ \u ->
         let u' = Lens.set userName name u
             u'' = Lens.over userService (Lens.set IRC.userHost host) u'
         in u''
@@ -458,7 +450,7 @@ whoisNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
 topicNum :: IrcAST -> Mind IRC ()
 topicNum (Numeric n ma t) = void . decide $ do
     unless (isJust ma) $ lift (noNumeric "332") >> throwError ()
-    lift $ modChanTopic (CI.mk $ fromJust ma) (const t) >>= verb
+    lift $ modChanTopic (fromJust ma) (const t) >>= verb
 
 -- TODO a way to get the name and host of users on join
 -- |
@@ -466,23 +458,22 @@ userlistNum :: IrcAST -> Mind IRC ()
 userlistNum (Numeric n ma t) = do
     server <- sees _currServer
     dir <- _confDirectory <$> seeConfig
-    let host = _servHost server
+    let host = _servId server
     flip (maybe $ noNumeric "353") ma $ \chan -> do
         musers <- join . fmap (Map.lookup host) <$> readConfig (dir <> "UserStats")
         forM_ (T.words t) $ \modenick -> do
             let (ircmode, nick) = T.break (`notElem` (id @String "~&@%+")) modenick
-                cinick = CI.mk nick
                 mode = toMode (T.unpack ircmode)
                 users = _servUsers server
                 cichan = CI.mk chan
-                mu = mapChans (Set.insert cichan) <$> Map.lookup cinick users
+                mu = mapChans (Set.insert cichan) <$> Map.lookup nick users
                 chans = Set.fromList [chan]
                 susers = maybe mempty id musers
                 stat = maybe Online id $ Map.lookup nick susers
                 mu' = flip fmap mu $ Lens.set userStatus stat
                 service = IRC.User "" ""
-                user = fromJust $ mu' <|> Just (Bot.User nick "" cinick mempty stat service)
-            modUserlist $ Map.insert cinick user
+                user = fromJust $ mu' <|> Just (Bot.User nick "" nick mempty stat service)
+            modUserlist $ Map.insert nick user
             when (stat > Online) $ return ()
                 --putPrivmsg $ "nickserv status " <> CI.original nick
 
@@ -490,9 +481,8 @@ userlistNum (Numeric n ma t) = do
 modeNum :: IrcAST -> Mind IRC ()
 modeNum (Numeric n ma t) = flip (maybe $ warn noArgs) ma $ \a -> do
     let (chan, mode) = dropWhile (== '+') . T.unpack <$> bisect (== ' ') a
-        cichan = CI.mk chan
     -- TODO FIXME
-    e <- modChan cichan $ id --Lens.set chanMode mode
+    e <- modChan chan $ id --Lens.set chanMode mode
     either warn return e
     write "IRC" $ "MODE " <> a
   where

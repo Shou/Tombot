@@ -165,7 +165,7 @@ allow _ g (Whitelist a) = g a
 getChan :: Text -> Mind s (Maybe $ Channel s)
 getChan chan = do
     server <- sees $ view currServer
-    return $ Map.lookup (CI.mk chan) $ view servChannels server
+    return $ Map.lookup chan $ view servChannels server
 
 -- | Get a Channel record field.
 getChanField :: Text -> (Channel s -> a) -> Mind s (Maybe a)
@@ -173,7 +173,8 @@ getChanField chan f = do
     channel <- getChan chan
     return $ fmap f channel
 
-getUser :: Nick -> Mind s (Maybe $ User s)
+-- | Get User by their user id
+getUser :: Text -> Mind s (Maybe $ User s)
 getUser nick = sees _currServer >>= return . Map.lookup nick . view servUsers
 
 mapChans :: (Set $ CI Text -> Set $ CI Text) -> User s -> User s
@@ -188,53 +189,55 @@ modUserlist f = do
     sets $ over currServer $ over servUsers f
 
 -- | Modify `Channel' data.
-modChan :: CI Text -> (Channel s -> Channel s) -> Mind s (Either Text ())
+modChan :: Text -> (Channel s -> Channel s) -> Mind s (Either Text ())
 modChan chan f = do
     server <- sees _currServer
     let cs = _servChannels server
         mc = Map.lookup chan cs
-        ec = note ("No channel: " <> CI.original chan) mc
+        ec = note ("No channel: " <> chan) mc
         cs' = maybe cs (flip (Map.insert chan) cs . f) mc
     sets $ over currServer $ over servChannels (const cs')
     return $ void ec
 
 -- | Change the topic of a channel.
-modChanTopic :: CI Text -> (Text -> Text) -> Mind s (Either Text ())
+modChanTopic :: Text -> (Text -> Text) -> Mind s (Either Text ())
 modChanTopic chan f = modChan chan $ over chanTopic f
 
 -- | Change the Funcs of a channel.
-modChanFuncs :: CI Text -- ^ Channel
+modChanFuncs :: Text -- ^ Channel
              -> (Map Text $ Funk s -> Map Text $ Funk s)
              -> Mind s (Either Text ())
 modChanFuncs chan f = modChan chan $ over chanFuncs f
 
 -- | Change whether the bot is allowed to join a channel.
-modChanJoin :: CI Text -> (Bool -> Bool) -> Mind s (Either Text ())
+modChanJoin :: Text -> (Bool -> Bool) -> Mind s (Either Text ())
 modChanJoin chan f = modChan chan $ over chanJoin f
 
 -- | Change whether the bot should auto-join on reconnect/kick.
-modChanAutoJoin :: CI Text -> (Bool -> Bool) -> Mind s (Either Text ())
+modChanAutoJoin :: Text -> (Bool -> Bool) -> Mind s (Either Text ())
 modChanAutoJoin chan f = modChan chan $ over chanAutoJoin f
 
 -- | Change the function prefix characters.
-modChanPrefix :: CI Text -> ([Char] -> [Char]) -> Mind s (Either Text ())
+modChanPrefix :: Text -> ([Char] -> [Char]) -> Mind s (Either Text ())
 modChanPrefix chan f = modChan chan $ over chanPrefix f
 
 -- | Modify User data.
-modUser :: Nick -> (User s -> User s) -> Mind s (Either Text ())
+modUser :: Text -> (User s -> User s) -> Mind s (Either Text ())
 modUser user f = do
     server <- sees _currServer
+
     let us = _servUsers server
         mu = Map.lookup user us
-        eu = note ("No user: " <> CI.original user) mu
+        eu = note ("No user: " <> user) mu
         us' = maybe us (flip (Map.insert user) us . f) mu
+
     sets $ over currServer $ over servUsers (const us')
     return $ void eu
 
 -- | When predicate `p' is True, run `m', otherwise return `()'.
 whenStat :: (Either [Char] UserStatus -> Bool) -> Mind s () -> Mind s ()
 whenStat p m = do
-    dest <- CI.original . either _userId _chanName <$> sees _currDestination
+    dest <- either _userId _chanId <$> sees _currDestination
     chans <- sees $ _userChannels . _currUser
     stat <- sees $ _userStatus . _currUser
     let isMode = False -- maybe False (p . Left) $ Map.lookup dest chans
@@ -247,7 +250,7 @@ whenStat p m = do
 -- | When predicate `p' is True, run `m', otherwise return `mempty'.
 mwhenStat :: Monoid a => (Either [Char] UserStatus -> Bool) -> Mind s a -> Mind s a
 mwhenStat p m = do
-    dest <- CI.original . either _userId _chanName <$> sees _currDestination
+    dest <- either _userId _chanId <$> sees _currDestination
     chans <- sees $ _userChannels . _currUser
     stat <- sees $ _userStatus . _currUser
     let isMode = False -- maybe False (p . Left) $ Map.lookup dest chans
@@ -323,18 +326,15 @@ readLocalStored path = do
     mchans <- readServerStored path
     edest <- sees _currDestination
 
-    let dest = CI.original $ either _userId _chanName edest
+    let dest = either _userId _chanId edest
         mstoreds = join $ Map.lookup dest <$> mchans
 
     return mstoreds
 
-mapConfig :: (Config -> Config) -> Mind s ()
-mapConfig = sets . over currConfig
-
 -- | Read a local (to the server) value stored in a file in the bot's path.
 readServerStored :: (Read a) => FilePath -> Mind s (Maybe a)
 readServerStored path = do
-    !serv <- sees $ _servHost . _currServer
+    !serv <- sees $ _servId . _currServer
     !dir <- _confDirectory <$> fmap _currConfig see
     mservers <- readConfig $ dir </> path
 
@@ -342,16 +342,19 @@ readServerStored path = do
 
     return mchans
 
+mapConfig :: (Config -> Config) -> Mind s ()
+mapConfig = sets . over currConfig
+
 -- | Modify a local (to the server and channel) value stored in a file in the
 --   bot's path.
 --modLocalStored :: (Read a, Show b, Monoid a) =>
 --                  FilePath -> (a -> b) -> Mind s ()
 modLocalStored path f = do
-    serv <- sees $ _servHost . _currServer
+    serv <- sees $ _servId . _currServer
     edest <- sees _currDestination
     dir <- _confDirectory <$> seeConfig
     mservers <- readConfig $ dir </> path
-    let dest = CI.original $ either _userId _chanName edest
+    let dest = either _userId _chanId edest
         mchans = join $ Map.lookup serv <$> mservers
         mstoreds = join $ Map.lookup dest <$> mchans
         storeds = maybe (f mempty) f mstoreds
@@ -380,7 +383,7 @@ colourise t = foldr ($) t (openers ++ closers)
 
 -- TODO
 -- | Get the API key for a service.
-getAPIKey :: Text -> Mind s (Maybe Text)
+getAPIKey :: (Read str, IsString str) => Text -> Mind s (Maybe str)
 getAPIKey t = do
     dir <- _confDirectory <$> seeConfig
     apiKeys <- readConfig $ dir </> "api"
@@ -399,7 +402,7 @@ serverfuncs funcs = do
     mschans <- readServerStored "letfuncs"
     edest <- sees _currDestination
     let sfuncs = maybe mempty id $ Map.unions . Map.elems <$> mschans
-        dest = CI.original $ either _userId _chanName edest
+        dest = either _userId _chanId edest
         lfuncs = maybe mempty id $ join $ Map.lookup dest <$> mschans
         lsfuncs = lfuncs <> sfuncs
         meval = (\f -> \g -> f . (g <>)) . funkFunc <$> Map.lookup "eval" funcs
@@ -594,21 +597,24 @@ pipeJoin (x:y:xs) | Text.length (x <> y) < 420 = (Just $ x <> " | " <> y, xs)
 
 -- | Adapt the Current s to the channel.
 adaptWith :: forall s. Default <=> '[Channel s, User s]
-          => Text -> Text -> CI Text -> Text -> Text
+          => Text -> Text -> Text -> Text -> Text
           -> (User s -> (Users s -> Users s)) -> Mind s ()
-adaptWith textChan nick uid name host f = do
+adaptWith chan nick uid name host f = do
     mchan <- sees $ Map.lookup chan . _servChannels . _currServer
     users <- sees $ _servUsers . _currServer
+
     let muser = Map.lookup uid users
         newUser = defUser & Lens.set userNick nick
                           . Lens.set userId uid
                           . Lens.set userName name
+
         puser = maybe newUser id muser
         user = puser & Lens.set userName name
-        newChan = defChan & Lens.set chanName chan
-        edest = if isChan textChan
+        newChan = defChan & Lens.set chanName (CI.mk chan)
+        edest = if isChan chan
                 then Right $ maybe newChan id mchan
                 else Left user
+
     sets $ Lens.set currDestination edest . Lens.set currUser user
     modUserlist $ f user
   where
@@ -616,7 +622,6 @@ adaptWith textChan nick uid name host f = do
     defChan = def
     defUser :: User s
     defUser = def
-    chan = CI.mk textChan
 
 -- }}}
 
@@ -743,6 +748,8 @@ see = sees id
 -- }}}
 
 -- {{{ Text utils
+
+ciEq a b = CI.mk a == CI.mk b
 
 -- | Break on True for `p' and split the matching words from the non-matching.
 wordbreaks :: (Text -> Bool) -> Text -> ([Text], [Text])

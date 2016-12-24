@@ -21,7 +21,7 @@ type instance Bot.UserService IRC = User
 type instance Bot.BotService IRC = Bot
 
 
-data Server = Server
+data Server = Server { _servPort :: Int }
   deriving (Show)
 
 data Channel = Channel
@@ -37,13 +37,13 @@ data Bot = Bot
 
 makeLenses ''User
 
-instance Default Server where def = Server
+instance Default Server where def = Server 6667
 instance Default Channel where def = Channel
 instance Default User where def = User mempty mempty
 instance Default Bot where def = Bot
 
 instance Default (Bot.Channel IRC) where
-  def = Bot.Channel mempty False False mempty [':'] mempty def
+  def = Bot.Channel mempty mempty False False mempty [':'] mempty def
 
 instance Default (Bot.User IRC) where
   def = Bot.User mempty mempty mempty mempty Bot.Offline def

@@ -273,13 +273,17 @@ compile funcs = funky . klToText mempty
 -- |
 botparse :: Map Text (Funk s) -> Text -> Mind s KawaiiLang
 botparse funcs t = fmap (either id id) . decide $ do
-    d <- either _userId _chanName . _currDestination <$> lift see
+    d <- either _userId _chanId . _currDestination <$> lift see
     chans <- _servChannels . _currServer <$> lift see
+
     let mchan = Map.lookup d chans
+
     unless (isJust mchan) $ lift (warn $ "No channel " <> d) >> throwError Kempty
+
     let chan = fromJust mchan
         parser = botparser (_chanPrefix chan) (Map.keys funcs)
         mkl = Atto.maybeResult . flip Atto.feed "" $ Atto.parse parser t
+
     return $ maybe Kempty id mkl
 
 -- }}}
