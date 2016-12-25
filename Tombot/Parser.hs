@@ -4,7 +4,8 @@
 -- Copyright Shou, 2013
 
 {-# LANGUAGE OverloadedStrings, DoAndIfThenElse, TupleSections,
-             ScopedTypeVariables
+             ScopedTypeVariables, StandaloneDeriving, TypeApplications,
+             PartialTypeSignatures
 #-}
 
 module Tombot.Parser (
@@ -29,7 +30,7 @@ import Control.Monad.Except
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as Atto
 import qualified Data.CaseInsensitive as CI
-import Data.Char
+import Data.Char as Char
 import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -101,8 +102,55 @@ khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
 
 -- {{{ New hot parser
 
-data Operator = Operator Text Bool Int
--- ^ Operator name, fixity, and precedence
+-- | Abstract syntax tree
+data Syntax = Let Text
+            | Fun Text
+            | Opr Text
+
+deriving instance Show Syntax
+
+
+skipSpaces = Atto.skipWhile (== ' ')
+
+skipSpaces1 = Atto.space >> skipSpaces >> pure ()
+
+around wrap parser = wrap *> parser <* wrap
+
+
+hotParser = Atto.many' parserSyntax
+
+parserSyntax :: Atto.Parser _
+parserSyntax = Atto.choice $ map (around skipSpaces)
+             [ parserLet
+             , parserOpr
+             , parserFun
+             ]
+
+parserLet :: Atto.Parser _
+parserLet = do
+    Atto.string "let"
+    skipSpaces1
+
+    a <- Atto.takeWhile1 (/= ' ')
+
+    skipSpaces1
+    Atto.string "="
+    skipSpaces1
+
+    return $ Let a
+
+parserFun = do
+    name <- Atto.takeWhile1 Char.isAlphaNum
+
+    return $ Fun name
+
+parserOpr = Opr <$> Atto.takeWhile1 p
+  where
+    p c = or @[] [Char.isSymbol c, Char.isPunctuation c]
+
+
+-- | Operator name, fixity, precedence
+data Operator = Operator Text (Either () ()) Int
 
 -- }}}
 
@@ -196,6 +244,7 @@ fullCmd fs = do
               else args
     return $ Func c m o
   where
+    lefts :: [Text]
     lefts = ["eval", "event", "help", "let", "on", "re"]
 
 -- FIXME check Funk Stat
@@ -437,10 +486,10 @@ numeric = do
     Atto.char ':'
     Atto.takeWhile (/= ' ')
     Atto.space
-    num <- Atto.takeWhile1 (`elem` ['0' .. '9'])
+    num <- Atto.takeWhile1 (`elem` (['0' .. '9'] :: [Char]))
     Atto.space
     Atto.takeWhile (/= ' ')
-    Atto.skipWhile (`elem` ['*', '=', '@'])
+    Atto.skipWhile (`elem` (['*', '=', '@'] :: [Char]))
     c <- fmap Text.stripEnd <$> cmd
     text <- (Atto.try $ colonText) <|> pure ""
     return $ Numeric num c text

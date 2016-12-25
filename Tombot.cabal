@@ -13,6 +13,7 @@ Build-Type:         Simple
 Executable tombot
     GHC-Options:
         -threaded
+        -fwarn-name-shadowing
     Build-Depends:
         aeson,
         attoparsec,

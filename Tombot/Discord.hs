@@ -284,7 +284,7 @@ stateConfigt = unsafePerformIO newEmptyTMVarIO
 {-# NOINLINE recvTChan #-}
 recvTChan = unsafePerformIO newTChanIO
 
-stateUsers :: TVar $ Map Text (Tombot.User IRC.IRC)
+stateUsers :: TVar $ Map Text $ Map Text $ Tombot.User IRC.IRC
 {-# NOINLINE stateUsers #-}
 stateUsers = unsafePerformIO $ newTVarIO mempty
 
@@ -347,6 +347,7 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
     atomically $ modifyTVar' stateChannelMetadata (channelMap <>)
 
     let members = guildcMembers d
+        users :: Map Text $ Tombot.User IRC.IRC
         users = Map.unions $ flip map members $ \mem ->
             let !user = memberUser mem
                 !mid = userId user
@@ -359,7 +360,7 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
                                , Tombot._userChannels = mempty
                                }
 
-    atomically $ modifyTVar' stateUsers $ Map.union users
+    atomically $ modifyTVar' stateUsers $ Map.insertWith Map.union serverId users
     print $ flip map members $ userUsername . memberUser
 
 onMessage :: Connection -> Dispatch MessageCreate -> IO ()
@@ -369,7 +370,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
     atomically $ swapTMVar stateSeq $ maybe 0 id s
     atomically $ writeTChan recvTChan $ messagecContent d
 
-    users <- atomically $ readTVar stateUsers
+    allUsers <- atomically $ readTVar stateUsers
     config <- atomically $ readTVar =<< readTMVar stateConfigt
     tid <- myThreadId
 
@@ -377,6 +378,8 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         ciChanName = CI.mk chanName
 
     meta <- getChannelMeta chanName
+
+    let serverUsers = maybe Map.empty id $ Map.lookup (view _1 meta) allUsers
 
     let chan :: Tombot.Channel IRC.IRC
         chan = Tombot.Channel { Tombot._chanName = CI.mk $ view _2 meta
@@ -394,7 +397,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         nick = maybe "idiot" id . Map.lookup "username" $ messagecAuthor d
         uid = maybe "" id . Map.lookup "id" $ messagecAuthor d
         user = Tombot.User nick "" uid (Set.singleton ciChanName) Tombot.Online def
-        users' = flip Map.map users
+        users' = flip Map.map serverUsers
                $ Lens.over Tombot.userChannels $ Set.insert ciChanName
 
         bot = Tombot.Bot { Tombot._botNick = "Tombot"

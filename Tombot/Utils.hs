@@ -342,6 +342,19 @@ readServerStored path = do
 
     return mchans
 
+-- | Return a list of all global 'stored' values
+readGlobalStored :: (IsString k, Ord k, Read k, Read a)
+                 => FilePath -> Mind s $ Map k a
+readGlobalStored path = do
+    !dir <- _confDirectory <$> fmap _currConfig see
+
+    mservers <- readConfig @_ @(Map Text $ Map Text _) $ dir </> path
+
+    let unionChans = Map.unions . Map.elems <$> mservers
+        unionStoreds = Map.unions . Map.elems <$> unionChans
+
+    return $ maybe Map.empty id unionStoreds
+
 mapConfig :: (Config -> Config) -> Mind s ()
 mapConfig = sets . over currConfig
 
@@ -354,13 +367,16 @@ modLocalStored path f = do
     edest <- sees _currDestination
     dir <- _confDirectory <$> seeConfig
     mservers <- readConfig $ dir </> path
+
     let dest = either _userId _chanId edest
         mchans = join $ Map.lookup serv <$> mservers
         mstoreds = join $ Map.lookup dest <$> mchans
         storeds = maybe (f mempty) f mstoreds
         chans = maybe (Map.singleton dest storeds) (Map.insert dest storeds) mchans
         servers = maybe (Map.singleton serv chans) (Map.insert serv chans) mservers
+
     e <- writeConf (dir </> path) servers
+
     either warn return e
 
 writeConf :: (MonadIO m, Show a) => FilePath -> a -> m (Either Text ())
@@ -399,17 +415,21 @@ funky m = fmap fst . runStateT m $ StFunk 0 1000
 
 serverfuncs :: Map Text $ Funk s -> Mind s $ Map Text $ Funk s
 serverfuncs funcs = do
+    globalFuncs <- readGlobalStored "letfuncs"
     mschans <- readServerStored "letfuncs"
     edest <- sees _currDestination
-    let sfuncs = maybe mempty id $ Map.unions . Map.elems <$> mschans
+
+    let serverFuncs = maybe mempty id $ Map.unions . Map.elems <$> mschans
         dest = either _userId _chanId edest
-        lfuncs = maybe mempty id $ join $ Map.lookup dest <$> mschans
-        lsfuncs = lfuncs <> sfuncs
+        localFuncs = maybe mempty id $ join $ Map.lookup dest <$> mschans
+        allFuncs = localFuncs <> serverFuncs <> globalFuncs
         meval = (\f -> \g -> f . (g <>)) . funkFunc <$> Map.lookup "eval" funcs
+
     if isJust meval
     then let eval = fromJust meval
-             lsfuncs' = Map.mapWithKey (\k v -> Funk k (eval v) Online) lsfuncs
-         in return lsfuncs'
+             allFuncs' = Map.mapWithKey (\k v -> Funk k (eval v) Online) allFuncs
+         in return allFuncs'
+
     else return mempty
 
 localfuncs :: Mind s $ Map Text $ Funk s

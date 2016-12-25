@@ -293,9 +293,9 @@ printTell send (Privmsg nick _ _ dest text) = unlessBanned $ do
 onMatch :: (Text -> Text -> Mind IRC ()) -> IrcAST -> Mind IRC ()
 onMatch send irc@(Privmsg nick name host dest text) = unlessBanned $ do
     (mlon :: Maybe _) <- readLocalStored "respond"
-    (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+    (mgons :: Map String _) <- readGlobalStored "respond"
 
-    let mons = mlon <> (Map.unions . Map.elems <$> msons)
+    let mons = mlon <> Just mgons
     let ons :: [(String, (Bool, Int, String))]
         ons = sortBy (comparing $ snd3 . snd) $ maybe mempty Map.toList mons
 

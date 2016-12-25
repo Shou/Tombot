@@ -1,7 +1,7 @@
 
-
 {-# LANGUAGE OverloadedStrings, ScopedTypeVariables, TupleSections,
-             BangPatterns #-}
+             BangPatterns
+#-}
 
 
 module Tombot.Discourse where
@@ -18,6 +18,7 @@ import qualified Data.Attoparsec.Text as A
 import qualified Data.Attoparsec.Combinator as A
 import Data.Either (rights)
 import Data.Maybe (catMaybes, fromJust, listToMaybe)
+import qualified Data.Map as Map
 import Data.Monoid ((<>), mempty)
 import Data.String (IsString(..))
 import Data.Text (Text)
@@ -28,7 +29,7 @@ import qualified Data.Vector as V
 
 import Network.Wreq
 
-import Safe (readMay)
+import Safe
 
 import System.Environment (getArgs)
 import System.IO.Unsafe (unsafePerformIO)
@@ -36,8 +37,9 @@ import System.IO.Unsafe (unsafePerformIO)
 
 board = "https://www.newflood.net/"
 user = "Shou"
-key = stripSpace . unsafePerformIO $ readFile "apikey"
+key = discKey . stripSpace . unsafePerformIO $ readFile "irc/api"
   where
+    discKey = Map.lookup "discourse-newflood" . read
     stripSpace = dropWhile (`elem` [' ', '\n']) . takeWhile (/= '\n')
 
 latest = "latest.json"
@@ -67,10 +69,13 @@ stripTags o c p = do
     (pre, tag) <- over _1 T.pack <$> till' A.anyChar tagOpen
     (mins, mmid) <- (,) <$> maybeTags <*> fmap Just (tillTagClose tag)
     mend <- maybeTags
+
     let mQuote = if p tag then Nothing else Just ()
-    return . T.concat $ catMaybes [ Just pre, mins <* mQuote
-                                  , (mmid <* mQuote) <|> Just "\n", mend
-                                  ]
+
+    return . T.concat $ catMaybes
+           [ Just pre, mins <* mQuote
+           , (mmid <* mQuote) <|> Just "\n", mend
+           ]
   where
     tagOpen = do
         A.char o

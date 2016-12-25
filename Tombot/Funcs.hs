@@ -112,6 +112,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("remind", remind, Online)
                 , ("kickban", kickban, Mod)
                 , ("on", respond, Online)
+                , ("user", userMeta, Online)
                 , ("users", userlist, Online)
                 , ("translate", translate, Online)
                 , ("ops", ops, Online)
@@ -135,7 +136,6 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("nyaa", nyaa, Online)
                 , ("nick", nick, Online)
                 , ("film", omdb, Online)
-                , ("quit", quit, Admin)
                 , ("stat", stat, Online)
                 , ("tell", tell, Online)
                 , ("wiki", wiki, Online)
@@ -509,19 +509,25 @@ cjoin str = do
         modChanJoin dest $ \cj -> maybe cj id $ readMay $ Text.unpack str
         return ""
 
--- XXX should work now, test it
 -- | DuckDuckGo !bang search.
 ddg :: Text -> Mind s Text
 ddg str = do
-    let burl = ("https://api.duckduckgo.com/?format=json&q=!" <>)
-        opts = Wreq.defaults
+    let burl = "http://api.duckduckgo.com/?format=json&q=!"
+        url = burl <> urlEncode (Text.unpack str)
+        opts = wreqOpts
+             & Wreq.redirects .~ 0
              & Wreq.checkStatus .~ (Just $ \_ _ _ -> Nothing)
 
-    er <- try $ Wreq.headWith opts $ burl $ urlEncode $ Text.unpack str
+    request <- try $ Wreq.getWith opts url
 
-    case er of
-        Right r -> liftIO $ print r >> return ""
-        Left e -> liftIO $ print e >> return ""
+    let location = request ^? _Right
+                            . Wreq.responseHeaders
+                            . Lens.to Map.fromList
+                            . Lens.at "Location"
+                            . _Just
+                            . Lens.to (Text.decodeUtf8With TextErr.lenientDecode)
+
+    return $ maybe "" id location
 
 -- | Shadify an URL
 shadify :: Text -> Mind s Text
@@ -876,28 +882,15 @@ lastfm str = do
 funcsList :: Text -> Mind s Text
 funcsList str = do
     edest <- sees _currDestination
-    let dest = either _userId _chanId edest
-    if Text.null $ Text.strip str
-    then do
-        let ea = fmap _chanFuncs edest
-            fs = either (const []) Map.keys ea
-        return $ Text.unwords fs
-    else mwhenPrivileged $ do
-        let mv = readMay $ allowedstr :: Maybe (Allowed [Text])
-            insert = case mv of
-                Just (Whitelist xs)
-                    | "funcs" `elem` xs -> const $ Whitelist xs
-                    | otherwise -> const $ Whitelist $ "funcs" : xs
-                Just (Blacklist xs)
-                    | "funcs" `notElem` xs -> const $ Blacklist xs
-                    | otherwise -> const $ Blacklist $ filter (/= "funcs") xs
-                Nothing -> id
-        verb allowedstr
-        e <- modChanFuncs dest id -- FIXME
-        return $ either id (const "") e
+    allFuncs <- serverfuncs funcs
+
+    let fs = Map.keys $ funcs <> allFuncs
+
+    return $ Text.unwords fs
   where
-    allowedstr = let (x, y) = show . words . Text.unpack <$> bisect (== ' ') str
-                 in unwords [Text.unpack x, y]
+    allowedstr =
+        let (x, y) = show . words . Text.unpack <$> bisect (== ' ') str
+        in unwords [Text.unpack x, y]
 
 -- TODO add more greetings
 -- | Greeting from the bot.
@@ -916,6 +909,7 @@ help str = do
     dir <- fmap _confDirectory seeConfig
     mhelps <- readConfig $ dir </> "help"
     mschans <- readServerStored "letfuncs"
+    --globalFuncs <- readGlobalStored "letfuncs"
     edest <- sees _currDestination
 
     let msfuncs = Map.unions . Map.elems <$> mschans
@@ -1034,9 +1028,9 @@ markov str = do
             newAcc = acc <> initPart
 
         (flip $ maybe $ pure newAcc) mayTailParts $ \tailParts -> do
-            n <- liftIO $ randomRIO (0, Vec.length tailParts - 1)
+            i <- liftIO $ randomRIO (0, Vec.length tailParts - 1)
 
-            let mayRandomTailPart = tailParts Vec.!? n
+            let mayRandomTailPart = tailParts Vec.!? i
 
             (flip $ maybe $ pure newAcc) mayRandomTailPart $ \tailPart ->
                 chainer2 (pred n) tailPart chains newAcc
@@ -1272,12 +1266,14 @@ manga str = do
 -- | Show whether the regex matches a string.
 match :: Text -> Mind s Text
 match str = do
-    let c = str `Text.index` 0
-        m = A.maybeResult . flip A.feed "" $ A.parse parsematch str
+    let m = A.maybeResult . flip A.feed "" $ A.parse parsematch str
+
     flip (maybe $ pure "") m $ \(mat, ins, str') -> do
         let regex = mkRegexWithOpts mat False ins
+
         emins <- try $ return $! matchRegex regex str'
-        either (const $ return "") (return . maybe "" (const "True")) emins
+
+        either (const $ return "") (return . maybe "" (const $ Text.pack str')) emins
 
 -- | Make the bot do an action; also known as /me.
 ircMe :: Text -> Mind IRC Text
@@ -1382,10 +1378,6 @@ priv str = do
     nick <- sees $ _userId . _currUser
     mvoid $ putPrivmsg nick str
 
--- | Disconnect from an IRC server.
-quit :: Text -> Mind s Text
-quit str = return ""
-
 -- | Pick a random choice or number.
 random :: Text -> Mind s Text
 random str
@@ -1407,12 +1399,6 @@ random str
 -- | Write directly to the IRC handle of the current server.
 raw :: Text -> Mind s Text
 raw str = mvoid $ write "IRC" str
-
--- TODO
--- FIXME this explodes
--- | Reload the bot's Config and Funcs.
-reload :: Text -> Mind s Text
-reload _ = return ""
 
 -- | Remind a user on join.
 remind :: Text -> Mind s Text
@@ -1478,24 +1464,30 @@ responds str = do
     deci m = m >>= return . either id id
     wrap t = andMconcat ["/", t, "/"]
 
+-- | Get the 'response' function
 frespond :: Text -> Mind s Text
 frespond str = do
     (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+
     let mons = Map.unions . Map.elems <$> msons
-    let mon :: Maybe (Bool, Int, Text)
+        mon :: Maybe (Bool, Int, Text)
         mon = join $ Map.lookup key <$> mons
         on = maybe "" (view _3) mon
+
     return on
   where
     key = Text.init . Text.tail $ str
 
+-- | Get the 'response' priority
 prespond :: Text -> Mind s Text
 prespond str = do
     (msons :: Maybe (Map Text _)) <- readServerStored "respond"
+
     let mons = Map.unions . Map.elems <$> msons
-    let mon :: Maybe (Bool, Int, Text)
+        mon :: Maybe (Bool, Int, Text)
         mon = join $ Map.lookup key <$> mons
         on = maybe "" (Text.pack . show . view _2) mon
+
     return on
   where
     key = Text.init . Text.tail $ str
@@ -1690,19 +1682,43 @@ urbandict str = do
     (flip $ maybe $ return "") mdefinition $ \definition -> do
         return $ str <> ": " <> Text.replace "\n" " | " definition
 
+userMeta :: forall s. Text -> Mind s Text
+userMeta str = do
+    users <- sees $ _servUsers . _currServer
+
+    let mayUser = join $ Map.lookup <$> mayId <*> pure users
+
+    return $ maybe "" getter mayUser
+  where
+    args = Text.words str
+    mayTextGetter = atMay args 0
+    mayId = atMay args 1 <|> mayTextGetter
+    mayGetter = join $ lookup <$> mayTextGetter <*> pure
+              [ ("nick", _userNick)
+              , ("name", _userName)
+              , ("id", _userId)
+              ]
+    getter = maybe _userNick id mayGetter
+
 -- | Print the channel's userlist.
 userlist :: forall s. Text -> Mind s Text
-userlist _ = do
+userlist str = do
     edest <- sees _currDestination
     users <- sees $ Map.elems . _servUsers . _currServer
 
     return $ either _userNick (chanNicks users) edest
   where
+    args = Text.words str
+    mayGetter = join $ lookup <$> atMay args 0 <*> pure
+              [ ("nick", _userNick)
+              , ("name", _userName)
+              , ("id", _userId)
+              ]
     chanNicks :: [User s] -> Channel s -> Text
     chanNicks us c = Text.unwords
-        $ map _userNick
+        $ map (maybe _userNick id mayGetter)
         $ filter ((/= Offline) . _userStatus)
-        $ filter (Set.member (_chanName c) . _userChannels) us
+        $ filter (Set.member (CI.mk $ _chanId c) . _userChannels) us
 
 -- | Set the Config verbosity
 verbosity :: Text -> Mind s Text
