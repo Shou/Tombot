@@ -16,6 +16,7 @@ module Tombot.Discord
 
 -- {{{ Imports
 
+import qualified Tombot.Discord.Types as Discord
 import qualified Tombot.Funcs as Tombot
 import qualified Tombot.IRC as IRC
 import qualified Tombot.IRC.Types as IRC
@@ -350,9 +351,11 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
         users = Map.unions $ flip map members $ \mem ->
             let !user = memberUser mem
                 !mid = userId user
+                !mayNick = memberNick mem
+                !name = userUsername user
             in Map.singleton mid $
-                   Tombot.User { Tombot._userNick = userUsername user
-                               , Tombot._userName = userUsername user
+                   Tombot.User { Tombot._userNick = maybe name id mayNick
+                               , Tombot._userName = name
                                , Tombot._userId = mid
                                , Tombot._userService = (def @(Tombot.UserService IRC.IRC))
                                , Tombot._userStatus = Tombot.Online
