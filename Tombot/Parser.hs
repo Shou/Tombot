@@ -103,8 +103,8 @@ khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
 -- {{{ New hot parser
 
 -- | Syntax
-data Syntax = Let Text
-            | Fun Text
+data Syntax = Let LHS
+            | Fun Text Text
             | Opr Text
 
 deriving instance Show Syntax
@@ -126,12 +126,37 @@ parserSyntax = Atto.choice $ map (around skipSpaces)
              , parserFun
              ]
 
+data LHS = LHSConstant Text
+         | LHSFunction Text [Text]
+         | LHSOperator Text Text Text
+         deriving (Show)
+
+parserConstLHS :: Parser LHS
+parserConstLHS = LHSConstant <$> Atto.takeWhile1 Char.isAlphaNum
+
+parserFuncLHS :: Parser LHS
+parserFuncLHS = do
+    name <- Atto.takeWhile Char.isAlphaNum
+    vars <- Atto.many1' $ skipSpaces1 >> Atto.takeWhile1 Char.isAlphaNum
+
+    return $ LHSFunction name vars
+
+parserOperLHS :: Parser LHS
+parserOperLHS = do
+    leftVar <- Atto.takeWhile Char.isAlphaNum
+    skipSpaces1
+    operator <- Atto.takeWhile isOperator
+    skipSpaces1
+    rightVar <- Atto.takeWhile Char.isAlphaNum
+
+    return $ LHSOperator leftVar operator rightVar
+
 parserLet :: Atto.Parser _
 parserLet = do
     Atto.string "let"
     skipSpaces1
 
-    a <- Atto.takeWhile1 (/= ' ')
+    a <- Atto.choice [parserOperLHS, parserFuncLHS, parserConstLHS]
 
     skipSpaces1
     Atto.string "="
@@ -142,11 +167,12 @@ parserLet = do
 parserFun = do
     name <- Atto.takeWhile1 Char.isAlphaNum
 
-    return $ Fun name
+    return $ Fun name ""
 
-parserOpr = Opr <$> Atto.takeWhile1 p
-  where
-    p c = or @[] [Char.isSymbol c, Char.isPunctuation c]
+isOperator :: Char -> Bool
+isOperator c = or @[] [Char.isSymbol c, Char.isPunctuation c]
+
+parserOpr = Opr <$> Atto.takeWhile1 isOperator
 
 
 -- | Operator name, fixity, precedence
