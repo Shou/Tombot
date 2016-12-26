@@ -102,7 +102,7 @@ khead (Parens kl0 kl1) = (Parens kl0 mempty, kl1)
 
 -- {{{ New hot parser
 
--- | Abstract syntax tree
+-- | Syntax
 data Syntax = Let Text
             | Fun Text
             | Opr Text

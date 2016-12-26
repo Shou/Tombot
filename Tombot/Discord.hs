@@ -45,7 +45,7 @@ import Data.IORef
 import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, listToMaybe)
+import Data.Maybe (catMaybes, listToMaybe, isNothing)
 import Data.Monoid
 import qualified Data.Set as Set
 import Data.String (IsString(..))
@@ -330,7 +330,6 @@ onReady conn dsptch@(Dispatch op d s t) = do
         sendJSON obj conn
     print tid
 
--- TODO PER SERVER/CHANNEL USERLIST
 onGuildCreate :: Connection -> Dispatch GuildCreate -> IO ()
 onGuildCreate conn dsptch@(Dispatch op d s t) = do
     print $ dsptch { dispatchD = () }
@@ -474,8 +473,12 @@ websockLoop conn = do
         maybe (return ()) (onPresUpdate conn) presUpdate
         maybe (return ()) (onTypingStart conn) typingStart
 
-        -- Preview all
-        maybe (return ()) (print . BL.take 50) mdm
+        let p = and @[] [ isNothing ready, isNothing guildCreate, isNothing message
+                        , isNothing presUpdate, isNothing typingStart
+                        ]
+
+        -- print when none match
+        when p $ maybe (return ()) print mdm
 
         websockLoop conn
 
@@ -503,7 +506,7 @@ runDiscord configt = do
       Just token -> do
         atomically $ putTMVar stateToken token
         -- XXX looks dangerous
-        websockInit `Except.onException` websockInit
+        forever $ Except.catch @SomeException websockInit print
 
       Nothing -> putStrLn $ "No Discord token in " <> apiPath
 
