@@ -285,7 +285,7 @@ stateConfigt = unsafePerformIO newEmptyTMVarIO
 {-# NOINLINE recvTChan #-}
 recvTChan = unsafePerformIO newTChanIO
 
-stateUsers :: TVar $ Map Text $ Map Text $ Tombot.User IRC.IRC
+stateUsers :: TVar $ Map Text $ Map Text $ Tombot.User Discord.Discord
 {-# NOINLINE stateUsers #-}
 stateUsers = unsafePerformIO $ newTVarIO mempty
 
@@ -347,17 +347,18 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
     atomically $ modifyTVar' stateChannelMetadata (channelMap <>)
 
     let members = guildcMembers d
-        users :: Map Text $ Tombot.User IRC.IRC
+        users :: Map Text $ Tombot.User Discord.Discord
         users = Map.unions $ flip map members $ \mem ->
             let !user = memberUser mem
                 !mid = userId user
                 !mayNick = memberNick mem
                 !name = userUsername user
+                !discriminator = userDiscriminator user
             in Map.singleton mid $
                    Tombot.User { Tombot._userNick = maybe name id mayNick
                                , Tombot._userName = name
                                , Tombot._userId = mid
-                               , Tombot._userService = (def @(Tombot.UserService IRC.IRC))
+                               , Tombot._userService = Discord.User discriminator
                                , Tombot._userStatus = Tombot.Online
                                , Tombot._userChannels = mempty
                                }
@@ -383,7 +384,7 @@ onMessage conn dsptch@(Dispatch op d s t) = do
 
     let serverUsers = maybe Map.empty id $ Map.lookup (view _1 meta) allUsers
 
-    let chan :: Tombot.Channel IRC.IRC
+    let chan :: Tombot.Channel Discord.Discord
         chan = Tombot.Channel { Tombot._chanName = CI.mk $ view _2 meta
                               , Tombot._chanId = chanName
                               , Tombot._chanTopic = ""

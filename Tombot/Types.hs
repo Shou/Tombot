@@ -69,7 +69,6 @@ lowerToEncoding n = genericToEncoding opts
 
 -- Services
 
-data Discord
 data Discourse
 
 
@@ -77,7 +76,6 @@ type family ServerService s
 type family ChannelService s
 type family UserService s
 type family BotService s
-
 
 type instance ServerService () = ()
 type instance ChannelService () = ()
@@ -256,27 +254,4 @@ makeLenses ''Server
 makeLenses ''Config
 makeLenses ''Current
 
-
--- {{{ Hub
-
-data Event s = EventMessage { eMessageUser :: User s
-                            , eMessageDest :: !Text
-                            , eMessageTime :: !POSIXTime
-                            , eMessageId :: !Text
-                            , eMessageText :: !Text
-                            }
-
-             | EventServer { eServerName :: !Text
-                           , eServerId :: !Text
-                           , eServerChans :: ![Text]
-                           }
-
-             | EventStatus { eStatusUser :: User s
-                           , eStatusStatus :: !UserStatus
-                           }
-
-             | EventTopic { eTopicText :: !Text
-                          }
-
--- }}}
 

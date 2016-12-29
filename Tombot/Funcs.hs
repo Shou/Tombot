@@ -132,9 +132,7 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("http", http, Online)
                 , ("isup", isup, Online)
                 , ("kill", kill, Online)
-                , ("name", name, Online)
                 , ("nyaa", nyaa, Online)
-                , ("nick", nick, Online)
                 , ("film", omdb, Online)
                 , ("stat", stat, Online)
                 , ("tell", tell, Online)
@@ -1289,17 +1287,6 @@ mode str = mwhenPrivileged $ do
     (m, s) = Text.break (== ' ') $ Text.strip str
     fullmode c = Text.unwords ["MODE", CI.original $ _chanName c, m, s]
 
--- | The current user's name
-name :: Text -> Mind s Text
-name _ = sees $ _userName . _currUser
-
--- | The current user's nick
-nick :: Text -> Mind s Text
-nick _ = sees $ _userNick . _currUser
-
-userId :: Text -> Mind s Text
-userId _ = sees $ _userId . _currUser
-
 -- TODO
 -- XXX on erroneous NICK, remove it from the list
 -- | Set the bot's nicks
@@ -1685,8 +1672,9 @@ urbandict str = do
 userMeta :: forall s. Text -> Mind s Text
 userMeta str = do
     users <- sees $ _servUsers . _currServer
+    ownId <- sees $ _userId . _currUser
 
-    let mayUser = join $ Map.lookup <$> mayId <*> pure users
+    let mayUser = Map.lookup (maybe ownId id mayId) users
 
     return $ maybe "" getter mayUser
   where
