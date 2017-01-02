@@ -67,6 +67,7 @@ listen = forever $ do
     let tryGetLine :: Mind IRC.IRC (Maybe Text)
         tryGetLine = liftIO $ do
             fmap join $ timeout (240*10^6) $ fmap hush $ try $ undefined
+
     mline <- tryGetLine
     maybe reconnect respond mline
 
@@ -74,25 +75,35 @@ listen = forever $ do
 respond :: Text -> Mind IRC.IRC ()
 respond line = do
     server <- sees _currServer
+
     let eirc = note line $ Atto.maybeResult $ Atto.parse ircparser line `Atto.feed` ""
+
     flip (either warn) eirc $ \irc -> void . runExceptT $ do
         liftIO $ print irc
+
         onNick irc $ \_ -> do
             nickUserlist irc
+
         onMode irc $ \_ -> do
             adaptMode irc
             changeMode irc
+
         onQuit irc $ \_ -> do
             quitUserlist irc
+
         onJoin irc $ \_ -> do
             adaptJoin irc
             addJoin irc
             remind irc
+
         onPart irc $ \_ -> do
             adaptPart irc
+
         onTopic irc $ \(IRC.Topic nick name host c t) -> do
             void $ modChanTopic c $ const t
+
         onPing irc $ \(IRC.Ping t) -> write "IRC" $ "PONG :" <> t
+
         onPrivmsg irc $ \_ -> do
             adaptPriv irc
             ctcpVersion irc
@@ -100,25 +111,34 @@ respond line = do
             void . forkMi $ onMatch putPrivmsg irc
             void . forkMi $ runLang putPrivmsg irc
             logPriv irc
+
         onInvite irc $ \_ -> do
             adaptInv irc
             joinInv irc
+
         onKick irc $ \_ -> do
             adaptKick irc
             botKick irc
+
         onNumeric "311" irc $ \_ -> do
             whoisNum irc
+
         onNumeric "324" irc $ \_ -> do
             modeNum irc
+
         onNumeric "332" irc $ \_ -> do
             topicNum irc
+
         onNumeric "353" irc $ \_ -> do
             adaptNum irc
             userlistNum irc
+
         onNumeric "376" irc $ \_ -> do
             welcomeNum irc
+
         onNumeric "433" irc $ \_ -> do
             cycleNick irc
+
         onNumeric "482" irc $ \_ -> do
             privilegeNum irc
 

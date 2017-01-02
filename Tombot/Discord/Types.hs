@@ -20,6 +20,9 @@ type instance Bot.ServerService Discord = ()
 type instance Bot.ChannelService Discord = ()
 type instance Bot.UserService Discord = User
 type instance Bot.BotService Discord = ()
+type instance Bot.MessageService Discord = ()
+-- | Channel ID
+type instance Bot.Destination Discord = Text
 
 deriving instance Show (Bot.Bot Discord)
 deriving instance Show (Bot.User Discord)
@@ -27,15 +30,18 @@ deriving instance Show (Bot.Channel Discord)
 deriving instance Show (Bot.Server Discord)
 deriving instance Show (Bot.Current Discord)
 
-instance Default (Bot.User Discord) where
-  def = Bot.User mempty mempty mempty mempty Bot.Offline def
 
-
-data User = User { _userDiscriminator :: Text }
-    deriving (Show)
+data User = User { _userDiscriminator :: Text
+                 , _userGame :: Maybe Text
+                 , _userRoles :: [Text]
+                 }
+                 deriving (Show)
 
 instance Default User where
-    def = User mempty
+    def = User mempty mempty mempty
+
+instance Default (Bot.User Discord) where
+  def = Bot.User mempty mempty mempty mempty Bot.Offline def
 
 makeLenses ''User
 

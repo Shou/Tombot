@@ -76,11 +76,15 @@ type family ServerService s
 type family ChannelService s
 type family UserService s
 type family BotService s
+type family MessageService s
+type family Destination s
 
 type instance ServerService () = ()
 type instance ChannelService () = ()
 type instance UserService () = ()
 type instance BotService () = ()
+type instance MessageService () = ()
+type instance Destination () = ()
 
 
 instance FromJSON (CI Text) where
@@ -89,7 +93,15 @@ instance FromJSON (CI Text) where
 
 data Args = Args { argsVerbosity :: Int
                  , argsService :: Text
+                 , argsConfigPath :: FilePath
                  }
+
+
+data Message s = Message { _messageContent :: Text
+                         , _messageUserId :: Text
+                         , _messageDestination :: Destination s
+                         , _messageService :: MessageService s
+                         }
 
 
 data Biallowed a b = Blacklist !a
@@ -219,9 +231,12 @@ instance ToJSON Config where
 data Current s = Current { _currUser :: User s
                          , _currServer :: Server s
                          , _currDestination :: Either (User s) (Channel s)
+                         , _currSender :: Message s -> Mind s ()
                          , _currConfig :: !Config
                          }
 
+instance Show (Message s -> Mind s ()) where
+    show _ = "_sender"
 
 data StFunk = StFunk { stFunkRecs :: !Int
                      , stFunkMax :: !Int
@@ -253,5 +268,6 @@ makeLenses ''Channel
 makeLenses ''Server
 makeLenses ''Config
 makeLenses ''Current
+makeLenses ''Message
 
 

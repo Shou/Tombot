@@ -16,6 +16,7 @@ module Tombot.Discord
 
 -- {{{ Imports
 
+import qualified Tombot.Discord.Actions as Discord
 import qualified Tombot.Discord.Types as Discord
 import qualified Tombot.Funcs as Tombot
 import qualified Tombot.IRC as IRC
@@ -235,9 +236,9 @@ instance FromJSON TypingStart where
 data PresenceUpdate = PresenceUpdate { presUser :: Map Text Text
                                      , presStatus :: Text
                                      , presRoles :: [Text]
-                                     , presNick :: Text
+                                     , presNick :: Maybe Text
                                      , presGuild_id :: Text
-                                     , presGame :: Text
+                                     , presGame :: Maybe Text
                                      }
                                      deriving (Generic, Show)
 
@@ -285,6 +286,7 @@ stateConfigt = unsafePerformIO newEmptyTMVarIO
 {-# NOINLINE recvTChan #-}
 recvTChan = unsafePerformIO newTChanIO
 
+-- | Map of guilds holding maps of users.
 stateUsers :: TVar $ Map Text $ Map Text $ Tombot.User Discord.Discord
 {-# NOINLINE stateUsers #-}
 stateUsers = unsafePerformIO $ newTVarIO mempty
@@ -316,12 +318,22 @@ sendHTTP path obj = do
 
     print responseText
 
+-- | Message sender
+send :: Message Discord -> Mind Discord ()
+send message = when (not $ T.null $ _messageContent message) $ do
+    let msgObj = Map.singleton @Text "content" $ _messageContent message
+        strChanId = T.unpack $ _messageDestination message
+
+    liftIO $ sendHTTP (messageURL strChanId) (encode msgObj)
+
+
 identify :: ToJSON a => a -> Connection -> IO ()
 identify obj = sendJSON $ Dispatch 2 obj Nothing Nothing
 
 onReady :: Connection -> Dispatch Ready -> IO ()
 onReady conn dsptch@(Dispatch op d s t) = do
     print $ dsptch { dispatchD = () }
+
     tid <- forkIO $ forever $ do
         let ms = readyHeartbeat_interval d * 1000
         putStr $ show ms
@@ -329,6 +341,7 @@ onReady conn dsptch@(Dispatch op d s t) = do
         seq <- atomically $ readTMVar stateSeq
         let obj = Dispatch 1 seq Nothing Nothing
         sendJSON obj conn
+
     print tid
 
 onGuildCreate :: Connection -> Dispatch GuildCreate -> IO ()
@@ -368,8 +381,7 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
 
 onMessage :: Connection -> Dispatch MessageCreate -> IO ()
 onMessage conn dsptch@(Dispatch op d s t) = do
-    print $ messagecAuthor d
-    print $ messagecContent d
+    putStrLn . mconcat $ [ messagecAuthor d, " — ", messagecContent d ]
     atomically $ swapTMVar stateSeq $ maybe 0 id s
     atomically $ writeTChan recvTChan $ messagecContent d
 
@@ -420,26 +432,47 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         current = Tombot.Current { Tombot._currUser = user
                                  , Tombot._currServer = server
                                  , Tombot._currDestination = Right chan
+                                 , Tombot._currSender = send
                                  , Tombot._currConfig = config
                                  }
 
-        privmsg = IRC.Privmsg nick "" "" chanName $ messagecContent d
+        message = Tombot.Message (messagecContent d) uid chanName _
 
     s <- newTVarIO current
 
     flip runReaderT s $ do
-        IRC.printTell send privmsg
-        void . Tombot.forkMi $ IRC.onMatch send privmsg
-        void . Tombot.forkMi $ IRC.runLang send privmsg
-        IRC.logPriv privmsg
-  where
-    send chan msg = when (not $ T.null msg) $ do
-        let msgObj = Map.singleton "content" msg :: Map Text Text
-        liftIO $ sendHTTP (messageURL $ T.unpack chan) (encode msgObj)
+        Discord.messageTell message
+        void . Tombot.forkMi $ Discord.messageMatch message
+        void . Tombot.forkMi $ Discord.messageInterpret message
+        Discord.messageLog message
+        Discord.messageTopicDetection message
 
 onPresUpdate :: Connection -> Dispatch PresenceUpdate -> IO ()
 onPresUpdate conn dsptch = do
-    print dsptch
+onPresUpdate conn dsptch@(Dispatch op d s t) = do
+    let mayUserId :: Maybe _
+        mayUserId = presUser d ^? Lens.at "id" . _Just
+        guildId = presGuild_id d
+        status = presStatus d
+        game = presGame d
+        roles = presRoles d
+
+    atomically $ do
+        users <- readTVar stateUsers
+        
+        let mayNewUsers = do
+                userId <- mayUserId
+
+                let zoom = at guildId . _Just
+                         . at userId . _Just
+                return $ users
+                       & zoom . userStatus ?~ status
+                       & zoom . userService . userGame ?~ game
+                       & zoom . userService . userRoles ?~ roles
+
+        maybe (return ()) (writeTVar stateUsers) mayNewUsers
+
+    print d
 
 onTypingStart :: Connection -> Dispatch TypingStart -> IO ()
 onTypingStart conn dsptch = do
@@ -509,8 +542,10 @@ runDiscord configt = do
     case mayToken of
       Just token -> do
         atomically $ putTMVar stateToken token
-        -- XXX looks dangerous
-        forever $ Except.catch @SomeException websockInit print
+
+        forever $ do
+            Except.catch @SomeException websockInit print
+            threadDelay 10^6
 
       Nothing -> putStrLn $ "No Discord token in " <> apiPath
 

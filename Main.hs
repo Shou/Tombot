@@ -178,8 +178,17 @@ service = option auto
         <> showDefault
         <> completeWith [] -- TODO use planned services list
 
+configPath :: Parser FilePath
+configPath = option auto
+           $ long "config"
+           <> short 'c'
+           <> metavar "filename"
+           <> help "Specify config filename."
+           <> value "Config.json"
+           <> showDefault
+
 fullArgs :: Parser Args
-fullArgs = Args <$> verbosity <*> service
+fullArgs = Args <$> verbosity <*> service <*> configPath
 
 parserOpts :: ParserInfo Args
 parserOpts = info (helper <*> fullArgs)
@@ -192,6 +201,7 @@ main2 = do
     config <- loadConfig
     servs <- atomically $ readTMVar undefined
     args <- execParser parserOpts
+
     forM_ @[] servs $ forkIO . ($ config)
 
 main :: IO ()
@@ -200,6 +210,7 @@ main = (=<<) (either print return) $ runExceptT $ do
     config <- case mayConfig of Nothing -> throwError Errors.noConfig
                                 Just config -> return config
     configt <- liftIO $ newTVarIO config
+
     liftIO $ initDB >> loadDB
     -- XXX IRC; disabled temporarily
     --forM_ servers $ \server -> forkIO $ initialise configt server

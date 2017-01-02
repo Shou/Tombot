@@ -40,11 +40,13 @@ import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.Default
+import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Monoid
 import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.String (IsString(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -822,6 +824,40 @@ bisect p = fmap tail' . Text.break p
 
 snd3 :: (a, b, c) -> b
 snd3 (_, b, _) = b
+
+-- }}}
+
+-- {{{ Statistics
+
+-- | Term frequency–inverse document frequency
+-- 
+-- https://en.wikipedia.org/wiki/Tf%E2%80%93idf
+tfIdf :: Ord a => a -> Vector a -> Vector $ Vector a -> Double
+tfIdf term document corpus = tf * idf
+  where
+    tf = termFrequency term document
+    idf = inverseDocumentFrequency term corpus
+
+-- | Takes a term and a document (e.g. list of words) and retrieves the
+--   frequency of the term.
+termFrequency :: (Foldable t, Ord a) => a -> t a -> Double
+termFrequency term document = maybe 0 id $ Map.lookup term documentMap
+  where
+    documentMap = foldl' (\m k -> Map.insertWith (+) k 1 m)
+                         Map.empty
+                         document
+
+-- | Takes a term and a corpus (collection of documents) and retrieves
+--   the 
+inverseDocumentFrequency :: Ord a => a -> Vector $ Vector a -> Double
+inverseDocumentFrequency term corpus =
+    totalDocuments / memberFrequency
+  where
+    documentSets = Vec.map (Set.fromList . Vec.toList) corpus
+    totalDocuments = fromIntegral $ Vec.length corpus
+    memberFrequency =
+        let incrementIfMember n = bool n (succ n) . Set.member term
+        in Vec.foldl' incrementIfMember 0 documentSets
 
 -- }}}
 
