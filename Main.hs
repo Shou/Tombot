@@ -192,8 +192,8 @@ fullArgs = Args <$> verbosity <*> service <*> configPath
 
 parserOpts :: ParserInfo Args
 parserOpts = info (helper <*> fullArgs)
-           $ fullDesc <> progDesc "Let her loose on your chats"
-                      <> header "Tombot the crazy chatbot"
+           $ fullDesc <> progDesc "Let her loose"
+                      <> header "Tombot"
 
 
 main2 = do
@@ -205,7 +205,7 @@ main2 = do
     forM_ @[] servs $ forkIO . ($ config)
 
 main :: IO ()
-main = (=<<) (either print return) $ runExceptT $ do
+main = (=<<) (either putStrLn return) $ runExceptT $ do
     mayConfig <- liftIO loadConfig
     config <- case mayConfig of Nothing -> throwError Errors.noConfig
                                 Just config -> return config

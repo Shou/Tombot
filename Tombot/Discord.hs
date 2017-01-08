@@ -17,6 +17,7 @@ module Tombot.Discord
 -- {{{ Imports
 
 import qualified Tombot.Discord.Actions as Discord
+import Tombot.Discord.Types (Discord)
 import qualified Tombot.Discord.Types as Discord
 import qualified Tombot.Funcs as Tombot
 import qualified Tombot.IRC as IRC
@@ -319,10 +320,11 @@ sendHTTP path obj = do
     print responseText
 
 -- | Message sender
-send :: Message Discord -> Mind Discord ()
-send message = when (not $ T.null $ _messageContent message) $ do
-    let msgObj = Map.singleton @Text "content" $ _messageContent message
-        strChanId = T.unpack $ _messageDestination message
+sendMessage :: Tombot.Message Discord -> Tombot.Mind Discord ()
+sendMessage message = when (not $ T.null $ Tombot._messageContent message) $ do
+    let msgObj = Map.singleton @Text "content"
+               $ Tombot._messageContent message
+        strChanId = T.unpack $ Tombot._messageDestination message
 
     liftIO $ sendHTTP (messageURL strChanId) (encode msgObj)
 
@@ -367,11 +369,14 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
                 !mayNick = memberNick mem
                 !name = userUsername user
                 !discriminator = userDiscriminator user
+                !game = Nothing
+                !roles = []
+                !service = Discord.User discriminator game roles
             in Map.singleton mid $
                    Tombot.User { Tombot._userNick = maybe name id mayNick
                                , Tombot._userName = name
                                , Tombot._userId = mid
-                               , Tombot._userService = Discord.User discriminator
+                               , Tombot._userService = service
                                , Tombot._userStatus = Tombot.Online
                                , Tombot._userChannels = mempty
                                }
@@ -381,7 +386,9 @@ onGuildCreate conn dsptch@(Dispatch op d s t) = do
 
 onMessage :: Connection -> Dispatch MessageCreate -> IO ()
 onMessage conn dsptch@(Dispatch op d s t) = do
-    putStrLn . mconcat $ [ messagecAuthor d, " — ", messagecContent d ]
+    putStrLn . mconcat $ [ show (messagecAuthor d)
+                         , " — ", show (messagecContent d)
+                         ]
     atomically $ swapTMVar stateSeq $ maybe 0 id s
     atomically $ writeTChan recvTChan $ messagecContent d
 
@@ -432,11 +439,11 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         current = Tombot.Current { Tombot._currUser = user
                                  , Tombot._currServer = server
                                  , Tombot._currDestination = Right chan
-                                 , Tombot._currSender = send
+                                 , Tombot._currSender = sendMessage
                                  , Tombot._currConfig = config
                                  }
 
-        message = Tombot.Message (messagecContent d) uid chanName _
+        message = Tombot.Message (messagecContent d) uid chanName ()
 
     s <- newTVarIO current
 
@@ -448,12 +455,14 @@ onMessage conn dsptch@(Dispatch op d s t) = do
         Discord.messageTopicDetection message
 
 onPresUpdate :: Connection -> Dispatch PresenceUpdate -> IO ()
-onPresUpdate conn dsptch = do
 onPresUpdate conn dsptch@(Dispatch op d s t) = do
     let mayUserId :: Maybe _
         mayUserId = presUser d ^? Lens.at "id" . _Just
         guildId = presGuild_id d
-        status = presStatus d
+        status = case presStatus d of
+            "online" -> Tombot.Online
+            "idle" -> Tombot.Idle
+            "offline" -> Tombot.Offline
         game = presGame d
         roles = presRoles d
 
@@ -465,10 +474,11 @@ onPresUpdate conn dsptch@(Dispatch op d s t) = do
 
                 let zoom = at guildId . _Just
                          . at userId . _Just
+
                 return $ users
-                       & zoom . userStatus ?~ status
-                       & zoom . userService . userGame ?~ game
-                       & zoom . userService . userRoles ?~ roles
+                       & zoom . Tombot.userStatus .~ status
+                       & zoom . Tombot.userService . Discord.userGame .~ game
+                       & zoom . Tombot.userService . Discord.userRoles .~ roles
 
         maybe (return ()) (writeTVar stateUsers) mayNewUsers
 
@@ -545,7 +555,7 @@ runDiscord configt = do
 
         forever $ do
             Except.catch @SomeException websockInit print
-            threadDelay 10^6
+            threadDelay $ 10^6
 
       Nothing -> putStrLn $ "No Discord token in " <> apiPath
 

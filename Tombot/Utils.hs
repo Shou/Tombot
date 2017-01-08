@@ -262,8 +262,9 @@ mwhenStat p m = do
         | isStat -> m
         | otherwise -> return mempty
 
+-- XXX always fails
 mwhenPrivileged :: Monoid a => Mind s a -> Mind s a
-mwhenPrivileged = mwhenStat (either isMod (>= Mod))
+mwhenPrivileged = mwhenStat (either isMod (> Online))
 
 mwhenUserStat :: Monoid a => (UserStatus -> Bool) -> Mind s a -> Mind s a
 mwhenUserStat p = mwhenStat (either (const False) p)
@@ -271,7 +272,7 @@ mwhenUserStat p = mwhenStat (either (const False) p)
 mwhenPrivTrans :: Monoid a => UserStatus -> Mind s a -> Mind s a
 mwhenPrivTrans u = mwhenStat (either isPriv (>= u))
   where
-    isPriv = if u >= Mod then isMod else const False
+    isPriv = if u > Online then isMod else const False
 
 unlessBanned :: Mind s () -> Mind s ()
 unlessBanned m = whenStat (either (const False) (/= Banned)) m
@@ -848,7 +849,7 @@ termFrequency term document = maybe 0 id $ Map.lookup term documentMap
                          document
 
 -- | Takes a term and a corpus (collection of documents) and retrieves
---   the 
+--   the WHAT?
 inverseDocumentFrequency :: Ord a => a -> Vector $ Vector a -> Double
 inverseDocumentFrequency term corpus =
     totalDocuments / memberFrequency

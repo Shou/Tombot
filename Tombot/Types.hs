@@ -118,10 +118,8 @@ instance Bifunctor Biallowed where
 
 data UserStatus = Offline
                 | Banned
+                | Idle
                 | Online
-                | Mod
-                | Admin
-                | BotOwner
                 deriving (Eq, Ord, Show, Read)
 
 type Mode = [Char]
@@ -236,7 +234,7 @@ data Current s = Current { _currUser :: User s
                          }
 
 instance Show (Message s -> Mind s ()) where
-    show _ = "_sender"
+    show _ = "(Message s -> Mind s ())"
 
 data StFunk = StFunk { stFunkRecs :: !Int
                      , stFunkMax :: !Int

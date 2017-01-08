@@ -95,10 +95,7 @@ import qualified Text.Taggy.Lens as Taggy
 -- | Service-agnostic functions
 funcs :: Map Text (Funk s)
 funcs = toFunks [ ("!", ddg, Online)
-                , ("ban", ban, Mod)
                 , ("say", echo, Online)
-                , ("kick", kick, Mod)
-                , ("voice", voice, Mod)
                 , ("currency", exchange, Online)
                 , ("cryptocoin", cryptocoin, Online)
                 , ("find", findMsg, Online)
@@ -110,7 +107,6 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("anime", anime, Online)
                 , ("random", random, Online)
                 , ("remind", remind, Online)
-                , ("kickban", kickban, Mod)
                 , ("on", respond, Online)
                 , ("user", userMeta, Online)
                 , ("users", userlist, Online)
@@ -119,7 +115,6 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("onfunction", frespond, Online)
                 , ("onpriority", prespond, Online)
                 , ("onsearch", responds, Online)
-                , ("raw", raw, BotOwner)
                 , ("sed", sed, Online)
                 , ("length", count, Online)
                 , ("let", store, Online)
@@ -139,14 +134,10 @@ funcs = toFunks [ ("!", ddg, Online)
                 , ("wiki", wiki, Online)
                 , ("show", reveal, Online)
                 , ("join", chanjoin, Online)
-                , ("part", partchan, Mod)
-                , ("verbosity", verbosity, Admin)
                 , ("cjoin", cjoin, Online)
                 , ("every", event, Online)
-                , ("fstat", fstat, Mod)
                 , ("functions", funcsList, Online)
                 , ("kanji", kanji, Online)
-                , ("botnicks", nicks, Admin)
                 , ("sleep", sleep, Online)
                 , ("title", title, Online)
                 , ("topic", topic, Online)
@@ -165,7 +156,6 @@ ircFuncs :: Map Text (Funk IRC)
 ircFuncs = toFunks [ ("<", priv, Online)
                    , ("me", ircMe, Online)
                    , ("host", host, Online)
-                   , ("mode", mode, Mod)
                    ]
 
 -- }}}
@@ -1291,9 +1281,9 @@ mode str = mwhenPrivileged $ do
 -- XXX on erroneous NICK, remove it from the list
 -- | Set the bot's nicks
 nicks :: Text -> Mind s Text
-nicks str = if Text.null $ Text.strip str
+nicks str = return "" {-if Text.null $ Text.strip str
     then _botNick . _servBot . _currServer <$> see
-    else mwhenUserStat (>= Admin) $ return ""
+    else mwhenUserStat (>= Admin) $ return ""-}
 
 -- | List the bot's available operators.
 ops :: Text -> Mind s Text
@@ -1344,7 +1334,7 @@ partchan str
     | Text.null $ Text.strip str = do
         edest <- sees _currDestination
         either (const $ pure "") (parter . CI.original . _chanName) edest
-    | otherwise = mwhenUserStat (>= Admin) $ parter str
+    | otherwise = mwhenUserStat (> Online) $ parter str
   where
     parter chan = mvoid $ write "IRC" $ "PART " <> chan
 
@@ -1520,7 +1510,7 @@ stat str = do
         return $ maybe "" (Text.pack . show . _userStatus) $ Map.lookup nick users
 
     else do
-        mwhenUserStat (>= Admin) $ do
+        mwhenUserStat (> Online) $ do
             servhost <- _servId <$> sees _currServer
             dir <- _confDirectory <$> seeConfig
             mservs <- readConfig $ dir </> "UserStats"
@@ -1713,7 +1703,7 @@ verbosity :: Text -> Mind s Text
 verbosity str = do
     if Text.null $ Text.strip str
     then Text.pack . show . _confVerbosity <$> seeConfig
-    else mwhenUserStat (== BotOwner) $ do
+    else mwhenUserStat (> Online) $ do
         mapConfig $ over confVerbosity $ \v ->
             maybe v id $ readMay $ Text.unpack str
 
