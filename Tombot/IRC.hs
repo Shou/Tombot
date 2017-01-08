@@ -1,7 +1,7 @@
 
 -- This file is part of Tombot, licensed under the GNU GPL 2 license.
 -- See the file "LICENSE" for more information.
--- Copyreturn Shou, 2013
+-- Copyright Shou, 2013
 
 {-# LANGUAGE OverloadedStrings, ScopedTypeVariables,
              PartialTypeSignatures, TypeApplications, FlexibleContexts
